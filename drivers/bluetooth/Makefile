@@ -48,3 +48,9 @@ hci_uart-$(CONFIG_BT_HCIUART_QCA)	+= hci_qca.o
 hci_uart-$(CONFIG_BT_HCIUART_AG6XX)	+= hci_ag6xx.o
 hci_uart-$(CONFIG_BT_HCIUART_MRVL)	+= hci_mrvl.o
 hci_uart-objs				:= $(hci_uart-y)
+
+#ifdef OPLUS_FEATURE_BT_BSA
+#Add for oplus bt smart antenna
+obj-$(CONFIG_OPLUS_FEATURE_BT_BSA) += oplus_bt_bsa/
+#endif /* OPLUS_FEATURE_BT_BSA */
+

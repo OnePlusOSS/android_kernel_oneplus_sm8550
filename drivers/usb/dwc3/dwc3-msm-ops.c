@@ -17,8 +17,40 @@
 
 struct kprobe_data {
 	struct dwc3 *dwc;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	struct usb_ep *ep;
+#endif
 	int xi0;
 };
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+static int entry_usb_ep_set_maxpacket_limit(struct kretprobe_instance *ri,
+				   struct pt_regs *regs)
+{
+	struct usb_ep *ep = (struct usb_ep *)regs->regs[0];
+	unsigned maxpacket_limit = (unsigned)regs->regs[1];
+
+	struct kprobe_data *data = (struct kprobe_data *)ri->data;
+	data->ep = ep;
+	data->xi0 = (int)maxpacket_limit;
+
+	return 0;
+}
+
+static int exit_usb_ep_set_maxpacket_limit(struct kretprobe_instance *ri,
+				   struct pt_regs *regs)
+{
+	struct kprobe_data *data = (struct kprobe_data *)ri->data;
+
+	if (data->xi0 == 0)
+	{
+	data->ep->maxpacket_limit = 1024;
+	data->ep->maxpacket = 1024;
+	}
+
+	return 0;
+}
+#endif
 
 static int entry_dwc3_gadget_run_stop(struct kretprobe_instance *ri,
 				   struct pt_regs *regs)
@@ -130,7 +162,11 @@ static int entry___dwc3_gadget_start(struct kretprobe_instance *ri,
 {
 	struct dwc3 *dwc = (struct dwc3 *)regs->regs[0];
 
-	dwc3_msm_notify_event(dwc, DWC3_CONTROLLER_SOFT_RESET, 0);
+	/*
+	 * Setup USB GSI event buffer as controller soft reset has cleared
+	 * configured event buffer.
+	 */
+	dwc3_msm_notify_event(dwc, DWC3_GSI_EVT_BUF_SETUP, 0);
 
 	return 0;
 }
@@ -231,6 +267,9 @@ static struct kretprobe dwc3_msm_probes[] = {
 	ENTRY(dwc3_gadget_reset_interrupt),
 	ENTRY_EXIT(dwc3_gadget_conndone_interrupt),
 	ENTRY_EXIT(dwc3_gadget_pullup),
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	ENTRY_EXIT(usb_ep_set_maxpacket_limit),
+#endif
 	ENTRY(__dwc3_gadget_start),
 	ENTRY(trace_dwc3_ctrl_req),
 	ENTRY(trace_dwc3_ep_queue),
@@ -249,10 +288,9 @@ int dwc3_msm_kretprobe_init(void)
 
 	for (i = 0; i < ARRAY_SIZE(dwc3_msm_probes) ; i++) {
 		ret = register_kretprobe(&dwc3_msm_probes[i]);
-		if (ret < 0) {
-			pr_err("register_kretprobe failed, returned %d\n", ret);
-			return ret;
-		}
+		if (ret < 0)
+			pr_err("register_kretprobe failed for %s, returned %d\n",
+					dwc3_msm_probes[i].kp.symbol_name, ret);
 	}
 
 	return 0;

@@ -150,8 +150,11 @@ static struct cache_req *cache_rpm_request(struct rpmh_ctrlr *ctrlr,
 
 	req = kzalloc(sizeof(*req), GFP_ATOMIC);
 	if (!req) {
-		req = ERR_PTR(-ENOMEM);
-		goto unlock;
+                req = kzalloc(sizeof(*req), GFP_ATOMIC | __GFP_MEMALLOC);
+                if (!req) {
+                     req = ERR_PTR(-ENOMEM);
+                     goto unlock;
+                 }
 	}
 
 	req->addr = cmd->addr;
@@ -241,6 +244,10 @@ static int __fill_rpmh_msg(struct rpmh_request *req, enum rpmh_state state,
 	return 0;
 }
 
+atomic_t rpmh_first_write = ATOMIC_INIT(1);
+atomic_t rpmh_write_num = ATOMIC_INIT(0);
+struct rpmh_request *rpm_msg_table;
+static DEFINE_SPINLOCK(rpmh_num_lock);
 /**
  * rpmh_write_async: Write a set of RPMH commands
  *
@@ -257,7 +264,9 @@ int rpmh_write_async(const struct device *dev, enum rpmh_state state,
 {
 	struct rpmh_ctrlr *ctrlr = get_rpmh_ctrlr(dev);
 	struct rpmh_request *rpm_msg;
-	int ret;
+	int ret, idx;
+        bool use_rpm_msg_table = false;
+        unsigned long flags;
 
 	if (rpmh_standalone)
 		return 0;
@@ -267,13 +276,40 @@ int rpmh_write_async(const struct device *dev, enum rpmh_state state,
 		return ret;
 
 	rpm_msg = kzalloc(sizeof(*rpm_msg), GFP_ATOMIC);
-	if (!rpm_msg)
-		return -ENOMEM;
-	rpm_msg->needs_free = true;
+        if (!rpm_msg) {
+                use_rpm_msg_table = true;
+        }
+
+        if (atomic_read(&rpmh_first_write)) {
+               atomic_set(&rpmh_first_write, 0);
+               rpm_msg_table = kcalloc(50, sizeof(*rpm_msg), GFP_ATOMIC);
+               if (!rpm_msg_table)
+                     return -ENOMEM;
+         }
+
+         if (use_rpm_msg_table) {
+                spin_lock_irqsave(&rpmh_num_lock, flags);
+
+                idx = atomic_read(&rpmh_write_num);
+                rpm_msg = &rpm_msg_table[idx];
+                if (!rpm_msg) {
+                      spin_unlock_irqrestore(&rpmh_num_lock, flags);
+                      return -ENOMEM;
+                }
+
+                atomic_inc(&rpmh_write_num);
+                if (atomic_read(&rpmh_write_num) == 50)
+                      atomic_set(&rpmh_write_num, 0);
+
+                spin_unlock_irqrestore(&rpmh_num_lock, flags);
+         }else
+                rpm_msg->needs_free = true;
 
 	ret = __fill_rpmh_msg(rpm_msg, state, cmd, n);
 	if (ret) {
-		kfree(rpm_msg);
+		if (!use_rpm_msg_table)
+                      kfree(rpm_msg);
+
 		return ret;
 	}
 

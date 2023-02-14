@@ -226,6 +226,11 @@ static int index_to_shadow_handle(int index)
 extern unsigned long hyp_nr_cpus;
 
 /*
+ * Track the vcpu most recently loaded on each physical CPU.
+ */
+static DEFINE_PER_CPU(struct kvm_vcpu *, last_loaded_vcpu);
+
+/*
  * Spinlock for protecting the shadow table related state.
  * Protects writes to shadow_table, num_shadow_entries, and next_shadow_alloc,
  * as well as reads and writes to last_shadow_vcpu_lookup.
@@ -267,6 +272,7 @@ struct kvm_vcpu *get_shadow_vcpu(int shadow_handle, unsigned int vcpu_idx)
 {
 	struct kvm_vcpu *vcpu = NULL;
 	struct kvm_shadow_vm *vm;
+	bool flush_context = false;
 
 	hyp_spin_lock(&shadow_lock);
 	vm = find_shadow_by_handle(shadow_handle);
@@ -279,11 +285,27 @@ struct kvm_vcpu *get_shadow_vcpu(int shadow_handle, unsigned int vcpu_idx)
 		vcpu = NULL;
 		goto unlock;
 	}
+
+	/*
+	 * Guarantee that both TLBs and I-cache are private to each vcpu.
+	 * The check below is conservative and could lead to over-invalidation,
+	 * because there is no need to nuke the contexts if the vcpu belongs to
+	 * a different vm.
+	 */
+	if (vcpu != __this_cpu_read(last_loaded_vcpu)) {
+		flush_context = true;
+		__this_cpu_write(last_loaded_vcpu, vcpu);
+	}
+
 	vcpu->arch.pkvm.loaded_on_cpu = true;
 
 	hyp_page_ref_inc(hyp_virt_to_page(vm));
 unlock:
 	hyp_spin_unlock(&shadow_lock);
+
+	/* No need for the lock while flushing the context. */
+	if (flush_context)
+		__kvm_flush_cpu_context(vcpu->arch.hw_mmu);
 
 	return vcpu;
 }
@@ -445,7 +467,6 @@ static int init_shadow_structs(struct kvm *kvm, struct kvm_shadow_vm *vm,
 		shadow_state->vm = vm;
 
 		shadow_vcpu->arch.hw_mmu = &vm->arch.mmu;
-		shadow_vcpu->arch.pkvm.shadow_handle = vm->shadow_handle;
 		shadow_vcpu->arch.pkvm.shadow_vm = vm;
 		shadow_vcpu->arch.power_off = true;
 
@@ -579,6 +600,25 @@ static int check_shadow_size(int nr_vcpus, size_t shadow_size)
 	return 0;
 }
 
+static void drain_shadow_vcpus(struct shadow_vcpu_state *shadow_vcpus,
+			       unsigned int nr_vcpus,
+			       struct kvm_hyp_memcache *mc)
+{
+	int i;
+
+	for (i = 0; i < nr_vcpus; i++) {
+		struct kvm_vcpu *shadow_vcpu = &shadow_vcpus[i].vcpu;
+		struct kvm_hyp_memcache *vcpu_mc = &shadow_vcpu->arch.pkvm_memcache;
+		void *addr;
+
+		while (vcpu_mc->nr_pages) {
+			addr = pop_hyp_memcache(vcpu_mc, hyp_phys_to_virt);
+			push_hyp_memcache(mc, addr, hyp_virt_to_phys);
+			WARN_ON(__pkvm_hyp_donate_host(hyp_virt_to_pfn(addr), 1));
+		}
+	}
+}
+
 /*
  * Initialize the shadow copy of the protected VM state using the memory
  * donated by the host.
@@ -696,6 +736,7 @@ int __pkvm_teardown_shadow(int shadow_handle)
 	u64 pfn;
 	u64 nr_pages;
 	void *addr;
+	int i;
 
 	/* Lookup then remove entry from the shadow table. */
 	hyp_spin_lock(&shadow_lock);
@@ -710,6 +751,19 @@ int __pkvm_teardown_shadow(int shadow_handle)
 		goto err_unlock;
 	}
 
+	/*
+	 * Clear the tracking for last_loaded_vcpu for all cpus for this vm in
+	 * case the same addresses for those vcpus are reused for future vms.
+	 */
+	for (i = 0; i < hyp_nr_cpus; i++) {
+		struct kvm_vcpu **last_loaded_vcpu_ptr =
+			per_cpu_ptr(&last_loaded_vcpu, i);
+		struct kvm_vcpu *vcpu = *last_loaded_vcpu_ptr;
+
+		if (vcpu && vcpu->arch.pkvm.shadow_vm == vm)
+			*last_loaded_vcpu_ptr = NULL;
+	}
+
 	/* Ensure the VMID is clean before it can be reallocated */
 	__kvm_tlb_flush_vmid(&vm->arch.mmu);
 	remove_shadow_table(shadow_handle);
@@ -718,6 +772,7 @@ int __pkvm_teardown_shadow(int shadow_handle)
 	/* Reclaim guest pages, and page-table pages */
 	mc = &vm->host_kvm->arch.pkvm.teardown_mc;
 	reclaim_guest_pages(vm, mc);
+	drain_shadow_vcpus(vm->shadow_vcpus, vm->created_vcpus, mc);
 	unpin_host_vcpus(vm->shadow_vcpus, vm->created_vcpus);
 
 	/* Push the metadata pages to the teardown memcache */
@@ -833,6 +888,10 @@ void pkvm_reset_vcpu(struct kvm_vcpu *vcpu)
 		*vcpu_pc(vcpu) = entry;
 
 		vm->pvmfw_entry_vcpu = NULL;
+
+		/* Auto enroll MMIO guard */
+		set_bit(KVM_ARCH_FLAG_MMIO_GUARD,
+			&vcpu->arch.pkvm.shadow_vm->arch.flags);
 	} else {
 		*vcpu_pc(vcpu) = reset_state->pc;
 		vcpu_set_reg(vcpu, 0, reset_state->r0);

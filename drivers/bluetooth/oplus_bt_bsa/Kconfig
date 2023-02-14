@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2020-2022 Oplus. All rights reserved.
+
+config OPLUS_FEATURE_BT_BSA
+	tristate "Add for oplus bt smart antenna function"
+	help
+	  Add for oplus bt smart antenna function.
+

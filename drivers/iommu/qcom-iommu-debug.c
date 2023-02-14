@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
- *
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt) "iommu-debug: %s: " fmt, __func__
 
+#include <linux/bitfield.h>
 #include <linux/debugfs.h>
 #include <linux/iommu.h>
 #include <linux/module.h>
@@ -132,6 +133,7 @@ iommu_debug_switch_usecase(struct iommu_debug_device *ddev, u32 usecase_nr)
 {
 	struct platform_device *test_pdev;
 	struct device_node *child;
+	const char *str;
 	int child_nr = 0;
 	int ret;
 
@@ -168,6 +170,10 @@ iommu_debug_switch_usecase(struct iommu_debug_device *ddev, u32 usecase_nr)
 		goto out;
 	}
 
+	if (of_property_read_string(child, "qcom,iommu-dma", &str))
+		str = "default";
+
+	ddev->fastmap_usecase = !strcmp(str, "fastmap");
 	ddev->usecase_nr = usecase_nr;
 	ddev->test_dev = &test_pdev->dev;
 	ddev->domain = iommu_get_domain_for_dev(ddev->test_dev);

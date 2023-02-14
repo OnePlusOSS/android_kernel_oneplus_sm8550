@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt)	"PMIC_GLINK: %s: " fmt, __func__
@@ -10,6 +10,7 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/idr.h>
+#include <linux/ipc_logging.h>
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
@@ -21,6 +22,15 @@
 #include <linux/remoteproc/qcom_rproc.h>
 #include <linux/soc/qcom/pdr.h>
 #include <linux/soc/qcom/pmic_glink.h>
+#include <trace/events/rproc_qcom.h>
+
+#define NUM_LOG_PAGES		10
+
+#define pmic_glink_dbg(pgdev, fmt, ...) \
+	do { \
+		ipc_log_string(pgdev->ipc_log, fmt, ##__VA_ARGS__); \
+		pr_debug(fmt, ##__VA_ARGS__); \
+	} while (0)
 
 /**
  * struct pmic_glink_dev - Top level data structure for pmic_glink device
@@ -28,8 +38,11 @@
  * @dev:		pmic_glink parent device for all child devices
  * @debugfs_dir:	Debugfs directory handle
  * @channel_name:	Glink channel name used by rpmsg device
+ * @ipc_log:		ipc logging handle
  * @client_idr:		idr list for the clients
  * @client_lock:	mutex lock when idr APIs are used on client_idr
+ * @rpdev_sem:		read-write semaphore to synchronize glink channel
+ *			availability and rpmsg transactions
  * @rx_lock:		spinlock to be used when rx_list is modified
  * @rx_work:		worker for handling rx messages
  * @init_work:		worker to instantiate child devices under pdev
@@ -57,8 +70,10 @@ struct pmic_glink_dev {
 	struct device		*dev;
 	struct dentry		*debugfs_dir;
 	const char		*channel_name;
+	void			*ipc_log;
 	struct idr		client_idr;
 	struct mutex		client_lock;
+	struct rw_semaphore	rpdev_sem;
 	spinlock_t		rx_lock;
 	struct work_struct	rx_work;
 	struct work_struct	init_work;
@@ -128,7 +143,7 @@ static void pmic_glink_notify_clients(struct pmic_glink_dev *pgdev,
 
 	pm_relax(pgdev->dev);
 
-	pr_debug("state_cb done %d\n", state);
+	pmic_glink_dbg(pgdev, "state_cb done %d\n", state);
 }
 
 static int pmic_glink_ssr_notifier_cb(struct notifier_block *nb,
@@ -137,14 +152,18 @@ static int pmic_glink_ssr_notifier_cb(struct notifier_block *nb,
 	struct pmic_glink_dev *pgdev = container_of(nb, struct pmic_glink_dev,
 						ssr_nb);
 
-	pr_debug("code: %lu\n", code);
+	pmic_glink_dbg(pgdev, "code: %lu\n", code);
 
 	switch (code) {
 	case QCOM_SSR_BEFORE_SHUTDOWN:
+		trace_rproc_qcom_event(pgdev->subsys_name,
+				"QCOM_SSR_BEFORE_SHUTDOWN", "pmic_glink_ssr_notifier-enter");
 		atomic_set(&pgdev->prev_state, code);
 		pmic_glink_notify_clients(pgdev, PMIC_GLINK_STATE_DOWN);
 		break;
 	case QCOM_SSR_AFTER_POWERUP:
+		trace_rproc_qcom_event(pgdev->subsys_name,
+				"QCOM_SSR_AFTER_POWERUP", "pmic_glink_ssr_notifier-enter");
 		/*
 		 * Do not notify PMIC Glink clients here but rather from
 		 * pmic_glink_init_work which will be run only after rpmsg
@@ -155,6 +174,7 @@ static int pmic_glink_ssr_notifier_cb(struct notifier_block *nb,
 		break;
 	}
 
+	trace_rproc_qcom_event(pgdev->subsys_name, "pmic_glink_ssr_notifier", "exit");
 	return NOTIFY_DONE;
 }
 
@@ -163,11 +183,12 @@ static void pmic_glink_pdr_notifier_cb(int state, char *service_name,
 {
 	struct pmic_glink_dev *pgdev = priv;
 
-	pr_debug("PDR state: %x\n", state);
+	pmic_glink_dbg(pgdev, "PDR state: %x\n", state);
 
 	switch (state) {
 	case SERVREG_SERVICE_STATE_DOWN:
-		pr_debug("PD state down for %s\n", pgdev->pdr_service_name);
+		pmic_glink_dbg(pgdev, "PD state down for %s\n",
+				pgdev->pdr_service_name);
 		pmic_glink_notify_clients(pgdev, PMIC_GLINK_STATE_DOWN);
 		atomic_set(&pgdev->pdr_state, state);
 		break;
@@ -177,7 +198,8 @@ static void pmic_glink_pdr_notifier_cb(int state, char *service_name,
 		 * pmic_glink_init_work which will be run only after rpmsg
 		 * driver is probed and Glink communication is up.
 		 */
-		pr_debug("PD state up for %s\n", pgdev->pdr_service_name);
+		pmic_glink_dbg(pgdev, "PD state up for %s\n",
+				pgdev->pdr_service_name);
 		break;
 	default:
 		break;
@@ -234,14 +256,18 @@ int pmic_glink_write(struct pmic_glink_client *client, void *data,
 	if (!client || !client->pgdev || !client->name)
 		return -ENODEV;
 
+	down_read(&client->pgdev->rpdev_sem);
+
 	if (!client->pgdev->rpdev || !atomic_read(&client->pgdev->state)) {
 		pr_err("Error in sending data for client %s\n", client->name);
+		up_read(&client->pgdev->rpdev_sem);
 		return -ENOTCONN;
 	}
 
 	mutex_lock(&client->lock);
 	rc = rpmsg_send(client->pgdev->rpdev->ept, data, len);
 	mutex_unlock(&client->lock);
+	up_read(&client->pgdev->rpdev_sem);
 
 	if (rc < 0)
 		pr_err("Failed to send data [%*ph] for client %s, rc=%d\n",
@@ -292,10 +318,13 @@ struct pmic_glink_client *pmic_glink_register_client(struct device *dev,
 		return ERR_PTR(-ENODEV);
 	}
 
+	down_read(&pgdev->rpdev_sem);
 	if (!atomic_read(&pgdev->state)) {
+		up_read(&pgdev->rpdev_sem);
 		pr_err("pmic_glink is not up\n");
 		return ERR_PTR(-EPROBE_DEFER);
 	}
+	up_read(&pgdev->rpdev_sem);
 
 	client = kzalloc(sizeof(*client), GFP_KERNEL);
 	if (!client)
@@ -332,6 +361,7 @@ struct pmic_glink_client *pmic_glink_register_client(struct device *dev,
 	}
 	mutex_unlock(&pgdev->client_lock);
 
+	pmic_glink_dbg(pgdev, "Registered client %s\n", client->name);
 	return client;
 }
 EXPORT_SYMBOL(pmic_glink_register_client);
@@ -362,6 +392,7 @@ int pmic_glink_unregister_client(struct pmic_glink_client *client)
 	idr_remove(&client->pgdev->client_idr, client->id);
 	mutex_unlock(&client->pgdev->client_lock);
 
+	pmic_glink_dbg(client->pgdev, "Unregistered client %s\n", client->name);
 	kfree(client->name);
 	kfree(client);
 	return 0;
@@ -454,9 +485,11 @@ static void pmic_glink_rpmsg_remove(struct rpmsg_device *rpdev)
 		return;
 	}
 
+	down_write(&pgdev->rpdev_sem);
 	atomic_set(&pgdev->state, 0);
 	pgdev->rpdev = NULL;
-	pr_debug("%s removed\n", rpdev->id.name);
+	up_write(&pgdev->rpdev_sem);
+	pmic_glink_dbg(pgdev, "%s removed\n", rpdev->id.name);
 }
 
 static int pmic_glink_rpmsg_probe(struct rpmsg_device *rpdev)
@@ -469,11 +502,13 @@ static int pmic_glink_rpmsg_probe(struct rpmsg_device *rpdev)
 		return -EPROBE_DEFER;
 	}
 
+	down_write(&pgdev->rpdev_sem);
 	dev_set_drvdata(&rpdev->dev, pgdev);
 	pgdev->rpdev = rpdev;
 	atomic_set(&pgdev->state, 1);
+	up_write(&pgdev->rpdev_sem);
 	schedule_work(&pgdev->init_work);
-	pr_debug("%s probed\n", rpdev->id.name);
+	pmic_glink_dbg(pgdev, "%s probed\n", rpdev->id.name);
 
 	return 0;
 }
@@ -619,6 +654,7 @@ static int pmic_glink_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	init_rwsem(&pgdev->rpdev_sem);
 	INIT_WORK(&pgdev->rx_work, pmic_glink_rx_work);
 	INIT_WORK(&pgdev->init_work, pmic_glink_init_work);
 	INIT_LIST_HEAD(&pgdev->client_dev_list);
@@ -629,6 +665,11 @@ static int pmic_glink_probe(struct platform_device *pdev)
 	idr_init(&pgdev->client_idr);
 	atomic_set(&pgdev->prev_state, QCOM_SSR_BEFORE_POWERUP);
 	atomic_set(&pgdev->pdr_state, SERVREG_SERVICE_STATE_UNINIT);
+
+	pgdev->ipc_log = ipc_log_context_create(NUM_LOG_PAGES,
+						pgdev->channel_name, 0);
+	if (!pgdev->ipc_log)
+		pr_warn("Error in creating ipc_log\n");
 
 	if (pgdev->subsys_name) {
 		pgdev->ssr_nb.notifier_call = pmic_glink_ssr_notifier_cb;
@@ -662,7 +703,7 @@ static int pmic_glink_probe(struct platform_device *pdev)
 			goto error_pdr;
 		}
 
-		pr_debug("Registering PDR for path_name: %s service_name: %s\n",
+		pmic_glink_dbg(pgdev, "Registering PDR for path_name: %s service_name: %s\n",
 			pgdev->pdr_path_name, pgdev->pdr_service_name);
 	}
 
@@ -673,7 +714,7 @@ static int pmic_glink_probe(struct platform_device *pdev)
 	pmic_glink_add_debugfs(pgdev);
 	device_init_wakeup(pgdev->dev, true);
 
-	pr_debug("%s probed successfully\n", pgdev->channel_name);
+	pmic_glink_dbg(pgdev, "%s probed successfully\n", pgdev->channel_name);
 	return 0;
 
 error_pdr:
@@ -681,6 +722,7 @@ error_pdr:
 error_service:
 	qcom_unregister_ssr_notifier(pgdev->subsys_handle, &pgdev->ssr_nb);
 error_subsys:
+	ipc_log_context_destroy(pgdev->ipc_log);
 	idr_destroy(&pgdev->client_idr);
 	destroy_workqueue(pgdev->rx_wq);
 	return rc;
@@ -690,6 +732,7 @@ static int pmic_glink_remove(struct platform_device *pdev)
 {
 	struct pmic_glink_dev *pgdev = dev_get_drvdata(&pdev->dev);
 
+	ipc_log_context_destroy(pgdev->ipc_log);
 	pdr_handle_release(pgdev->pdr_handle);
 	qcom_unregister_ssr_notifier(pgdev->subsys_handle, &pgdev->ssr_nb);
 	device_init_wakeup(pgdev->dev, false);

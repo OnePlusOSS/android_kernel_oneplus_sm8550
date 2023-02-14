@@ -873,6 +873,13 @@ config UCLAMP_BUCKETS_COUNT
 
 	  If in doubt, use the default value.
 
+#ifdef OPLUS_FEATURE_THERMAL_HORAE
+source "kernel/oplus_cpu/thermal/Kconfig"
+#endif /* OPLUS_FEATURE_THERMAL_HORAE */
+#ifdef OPLUS_FEATURE_PERFORMANCE_SCHED
+source "kernel/oplus_cpu/sched/Kconfig"
+#endif /* OPLUS_FEATURE_PERFORMANCE_SCHED */
+
 endmenu
 
 #

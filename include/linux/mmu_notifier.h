@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 #include <linux/srcu.h>
 #include <linux/interval_tree.h>
+#include <linux/android_kabi.h>
 
 struct mmu_notifier_subscriptions;
 struct mmu_notifier;
@@ -223,6 +224,11 @@ struct mmu_notifier_ops {
 	 */
 	struct mmu_notifier *(*alloc_notifier)(struct mm_struct *mm);
 	void (*free_notifier)(struct mmu_notifier *subscription);
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
 
 /*
@@ -242,6 +248,9 @@ struct mmu_notifier {
 	struct mm_struct *mm;
 	struct rcu_head rcu;
 	unsigned int users;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 /**
@@ -523,12 +532,7 @@ static inline void mmu_notifier_subscriptions_destroy(struct mm_struct *mm)
 		__mmu_notifier_subscriptions_destroy(mm);
 
 #ifdef CONFIG_SPECULATIVE_PAGE_FAULT
-	if (!in_atomic()) {
-		percpu_free_rwsem(mm->mmu_notifier_lock);
-		kfree(mm->mmu_notifier_lock);
-	} else {
-		percpu_rwsem_async_destroy(mm->mmu_notifier_lock);
-	}
+	percpu_rwsem_async_destroy(mm->mmu_notifier_lock);
 #endif
 }
 

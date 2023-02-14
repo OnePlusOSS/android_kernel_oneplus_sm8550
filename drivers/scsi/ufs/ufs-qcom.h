@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef UFS_QCOM_H_
@@ -10,6 +11,7 @@
 #include <linux/phy/phy.h>
 #include <linux/pm_qos.h>
 #include <linux/notifier.h>
+#include <linux/proc_fs.h>
 #include "ufshcd.h"
 #include "unipro.h"
 
@@ -28,6 +30,14 @@
 #define UFS_HW_VER_MINOR_MASK	(0x0FFF << UFS_HW_VER_MINOR_SHFT)
 #define UFS_HW_VER_STEP_SHFT	(0)
 #define UFS_HW_VER_STEP_MASK	(0xFFFF << UFS_HW_VER_STEP_SHFT)
+
+/*
+ * UFS_MEM_DEBUG_SPARE_CFG[0:3] = UFS device's minor version
+ * UFS_MEM_DEBUG_SPARE_CFG[4:7] = UFS device's major version
+ */
+#define UFS_DEVICE_VER_MAJOR_SHFT (4)
+#define UFS_DEVICE_VER_MAJOR_MASK  (0x000F << UFS_DEVICE_VER_MAJOR_SHFT)
+#define UFS_DEVICE_VER_MINOR_MASK 0x000F
 
 #define UFS_VENDOR_MICRON	0x12C
 
@@ -85,6 +95,7 @@ enum {
 	 */
 	UFS_AH8_CFG				= 0xFC,
 	UFS_MEM_ICE				= 0x2600,
+	REG_UFS_DEBUG_SPARE_CFG			= 0x284C,
 };
 
 /* QCOM UFS host controller vendor specific debug registers */
@@ -167,6 +178,105 @@ enum {
 #define UFS_QCOM_MAX_HS_GEAR(x) (((x) & UFS_MAX_HS_GEAR_MASK) >>\
 				 UFS_MAX_HS_GEAR_SHIFT)
 
+/*define ufs uic error code*/
+
+enum unipro_pa_errCode {
+	UNIPRO_PA_LANE0_ERR_CNT,
+	UNIPRO_PA_LANE1_ERR_CNT,
+	UNIPRO_PA_LANE2_ERR_CNT,
+	UNIPRO_PA_LANE3_ERR_CNT,
+	UNIPRO_PA_LINE_RESET,
+	UNIPRO_PA_ERR_MAX
+};
+
+enum unipro_dl_errCode {
+	UNIPRO_DL_NAC_RECEIVED,
+	UNIPRO_DL_TCX_REPLAY_TIMER_EXPIRED,
+	UNIPRO_DL_AFCX_REQUEST_TIMER_EXPIRED,
+	UNIPRO_DL_FCX_PROTECTION_TIMER_EXPIRED,
+	UNIPRO_DL_CRC_ERROR,
+	UNIPRO_DL_RX_BUFFER_OVERFLOW,
+	UNIPRO_DL_MAX_FRAME_LENGTH_EXCEEDED,
+	UNIPRO_DL_WRONG_SEQUENCE_NUMBER,
+	UNIPRO_DL_AFC_FRAME_SYNTAX_ERROR,
+	UNIPRO_DL_NAC_FRAME_SYNTAX_ERROR,
+	UNIPRO_DL_EOF_SYNTAX_ERROR,
+	UNIPRO_DL_FRAME_SYNTAX_ERROR,
+	UNIPRO_DL_BAD_CTRL_SYMBOL_TYPE,
+	UNIPRO_DL_PA_INIT_ERROR,
+	UNIPRO_DL_PA_ERROR_IND_RECEIVED,
+	UNIPRO_DL_PA_INIT,
+	UNIPRO_DL_ERR_MAX
+};
+
+enum unipro_nl_errCode {
+	UNIPRO_NL_UNSUPPORTED_HEADER_TYPE,
+	UNIPRO_NL_BAD_DEVICEID_ENC,
+	UNIPRO_NL_LHDR_TRAP_PACKET_DROPPING,
+	UNIPRO_NL_ERR_MAX
+};
+
+enum unipro_tl_errCode {
+	UNIPRO_TL_UNSUPPORTED_HEADER_TYPE,
+	UNIPRO_TL_UNKNOWN_CPORTID,
+	UNIPRO_TL_NO_CONNECTION_RX,
+	UNIPRO_TL_CONTROLLED_SEGMENT_DROPPING,
+	UNIPRO_TL_BAD_TC,
+	UNIPRO_TL_E2E_CREDIT_OVERFLOW,
+	UNIPRO_TL_SAFETY_VALVE_DROPPING,
+	UNIPRO_TL_ERR_MAX
+};
+
+enum unipro_dme_errCode {
+	UNIPRO_DME_GENERIC,
+	UNIPRO_DME_TX_QOS,
+	UNIPRO_DME_RX_QOS,
+	UNIPRO_DME_PA_INIT_QOS,
+	UNIPRO_DME_ERR_MAX
+};
+
+enum unipro_err_time_stamp {
+	UNIPRO_0_STAMP,
+	UNIPRO_1_STAMP,
+	UNIPRO_2_STAMP,
+	UNIPRO_3_STAMP,
+	UNIPRO_4_STAMP,
+	UNIPRO_5_STAMP,
+	UNIPRO_6_STAMP,
+	UNIPRO_7_STAMP,
+	UNIPRO_8_STAMP,
+	UNIPRO_9_STAMP,
+	STAMP_RECORD_MAX
+};
+#define STAMP_MIN_INTERVAL ((ktime_t)600000000000) /*ns, 10min*/
+
+struct signal_quality {
+	u32 ufs_device_err_cnt;
+	u32 ufs_host_err_cnt;
+	u32 ufs_bus_err_cnt;
+	u32 ufs_crypto_err_cnt;
+	u32 ufs_link_lost_cnt;
+	u32 unipro_PA_err_total_cnt;
+	u32 unipro_PA_err_cnt[UNIPRO_PA_ERR_MAX];
+	u32 unipro_DL_err_total_cnt;
+	u32 unipro_DL_err_cnt[UNIPRO_DL_ERR_MAX];
+	u32 unipro_NL_err_total_cnt;
+	u32 unipro_NL_err_cnt[UNIPRO_NL_ERR_MAX];
+	u32 unipro_TL_err_total_cnt;
+	u32 unipro_TL_err_cnt[UNIPRO_TL_ERR_MAX];
+	u32 unipro_DME_err_total_cnt;
+	u32 unipro_DME_err_cnt[UNIPRO_DME_ERR_MAX];
+	/* first 10 error cnt, interval is 10min at least */
+	ktime_t stamp[STAMP_RECORD_MAX];
+	int stamp_pos;
+};
+
+struct unipro_signal_quality_ctrl {
+	struct proc_dir_entry *ctrl_dir;
+	struct signal_quality record;
+	struct signal_quality record_upload;
+};
+
 /* bit offset */
 enum {
 	OFFSET_UFS_PHY_SOFT_RESET           = 1,
@@ -235,6 +345,12 @@ enum ufs_qcom_phy_init_type {
  * Enable this quirk to give it an additional 100us.
  */
 #define UFS_DEVICE_QUIRK_PA_HIBER8TIME          (1 << 15)
+
+/*
+ * Some ufs device vendors need a different TSync length.
+ * Enable this quirk to give an additional TX_HS_SYNC_LENGTH.
+ */
+#define UFS_DEVICE_QUIRK_PA_TX_HSG1_SYNC_LENGTH (1 << 16)
 
 static inline void
 ufs_qcom_get_controller_revision(struct ufs_hba *hba,
@@ -532,6 +648,12 @@ struct ufs_qcom_host {
 	struct device_node *np;
 	int chosen_algo;
 	struct ufs_clk_info *ref_clki;
+	struct ufs_clk_info *core_unipro_clki;
+	atomic_t hi_pri_en;
+	atomic_t therm_mitigation;
+	cpumask_t perf_mask;
+	cpumask_t def_mask;
+	u32 vccq_lpm_uV;
 };
 
 static inline u32
@@ -546,6 +668,7 @@ ufs_qcom_get_debug_reg_offset(struct ufs_qcom_host *host, u32 reg)
 #define ufs_qcom_is_link_off(hba) ufshcd_is_link_off(hba)
 #define ufs_qcom_is_link_active(hba) ufshcd_is_link_active(hba)
 #define ufs_qcom_is_link_hibern8(hba) ufshcd_is_link_hibern8(hba)
+#define ufs_qcom_is_ufs_dev_active(hba) ufshcd_is_ufs_dev_active(hba)
 
 int ufs_qcom_testbus_config(struct ufs_qcom_host *host);
 void ufs_qcom_print_hw_debug_reg_all(struct ufs_hba *hba, void *priv,
@@ -606,7 +729,7 @@ out:
  *  SCSI_IOCTL_GET_PCI
  */
 #define UFS_IOCTL_QUERY			0x5388
-
+#define UFS_IOCTL_MONITOR               0x5392  /* For monitor access */
 /**
  * struct ufs_ioctl_query_data - used to transfer data to and from user via
  * ioctl

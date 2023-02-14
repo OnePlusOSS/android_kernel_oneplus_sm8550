@@ -269,7 +269,7 @@ int gh_get_irq(u32 virq, u32 type, struct fwnode_handle *handle);
 int gh_put_irq(int irq);
 int gh_get_virq(int base_virq, int virq);
 int gh_put_virq(int irq);
-int gh_arch_validate_vm_exited_notif(size_t buff_size, size_t hdr_size,
+int gh_arch_validate_vm_exited_notif(size_t payload_size,
 	struct gh_rm_notif_vm_exited_payload *payload);
 #else
 static inline int gh_get_irq(u32 virq, u32 type,
@@ -289,8 +289,8 @@ static inline int gh_put_virq(int irq)
 {
 	return -EINVAL;
 }
-static inline int gh_arch_validate_vm_exited_notif(size_t buff_size,
-	size_t hdr_size, struct gh_rm_notif_vm_exited_payload *payload)
+static inline int gh_arch_validate_vm_exited_notif(size_t payload_size,
+	struct gh_rm_notif_vm_exited_payload *payload)
 {
 	return -EINVAL;
 }
@@ -314,6 +314,7 @@ struct notifier_block;
 
 typedef int (*gh_virtio_mmio_cb_t)(gh_vmid_t peer, const char *vm_name,
 	gh_label_t label, gh_capid_t cap_id, int linux_irq, u64 base, u64 size);
+typedef int (*gh_wdog_manage_cb_t)(gh_vmid_t vmid, gh_capid_t cap_id, bool populate);
 typedef int (*gh_vcpu_affinity_set_cb_t)(gh_vmid_t vmid, gh_label_t label,
 						gh_capid_t cap_id, int linux_irq);
 typedef int (*gh_vcpu_affinity_reset_cb_t)(gh_vmid_t vmid, gh_label_t label,
@@ -346,6 +347,7 @@ int gh_rm_vm_irq_reclaim(gh_virq_handle_t virq_handle);
 
 int gh_rm_set_virtio_mmio_cb(gh_virtio_mmio_cb_t fnptr);
 void gh_rm_unset_virtio_mmio_cb(void);
+int gh_rm_set_wdog_manage_cb(gh_wdog_manage_cb_t fnptr);
 int gh_rm_set_vcpu_affinity_cb(gh_vcpu_affinity_set_cb_t fnptr);
 int gh_rm_reset_vcpu_affinity_cb(gh_vcpu_affinity_reset_cb_t fnptr);
 int gh_rm_set_vpm_grp_cb(gh_vpm_grp_set_cb_t fnptr);
@@ -415,6 +417,12 @@ int gh_rm_mem_notify(gh_memparcel_handle_t handle, u8 flags,
 
 /* API to set time base */
 int gh_rm_vm_set_time_base(gh_vmid_t vmid);
+
+/* API for minidump support */
+int gh_rm_minidump_get_info(void);
+int gh_rm_minidump_register_range(phys_addr_t base_ipa, size_t region_size,
+				  const char *name, size_t name_size);
+int gh_rm_minidump_deregister_slot(uint16_t slot_num);
 
 #else
 /* RM client register notifications APIs */
@@ -661,6 +669,11 @@ static inline void gh_rm_unset_virtio_mmio_cb(void)
 
 }
 
+static inline int gh_rm_set_wdog_manage_cb(gh_wdog_manage_cb_t fnptr)
+{
+	return -EINVAL;
+}
+
 static inline int gh_rm_set_vcpu_affinity_cb(gh_vcpu_affinity_set_cb_t fnptr)
 {
 	return -EINVAL;
@@ -691,5 +704,24 @@ static inline int gh_rm_vm_set_time_base(gh_vmid_t vmid)
 {
 	return -EINVAL;
 }
+
+/* API for minidump support */
+static inline int gh_rm_minidump_get_info(void)
+{
+	return -EINVAL;
+}
+
+static inline int gh_rm_minidump_register_range(phys_addr_t base_ipa,
+					 size_t region_size, const char *name,
+					 size_t name_size)
+{
+	return -EINVAL;
+}
+
+static inline int gh_rm_minidump_deregister_slot(uint16_t slot_num)
+{
+	return -EINVAL;
+}
+
 #endif
 #endif

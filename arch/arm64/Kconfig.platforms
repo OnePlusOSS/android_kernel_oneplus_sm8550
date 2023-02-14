@@ -232,6 +232,22 @@ config ARCH_KALAMA
 	  KALAMA chipset. If you do not wish to build a kernel that
 	  runs on this chipset or if you are unsure, say 'N' here.
 
+config ARCH_KAKA
+	bool "Enable Support for Qualcomm Technologies, Inc. KAKA"
+	depends on ARCH_QCOM
+	help
+	  This enables support for the Qualcomm Technologies, Inc.'s
+	  KAKA chipset. If you do not wish to build a kernel that
+	  runs on this chipset or if you are unsure, say 'N' here.
+
+config ARCH_KONA
+	bool "Enable Support for Qualcomm Technologies, Inc. KONA"
+	depends on ARCH_QCOM
+	help
+	  This enables support for the Qualcomm Technologies, Inc.'s
+	  KONA chipset. If you do not wish to build a kernel that
+	  runs on this chipset or if you are unsure, say 'N' here.
+
 config ARCH_WAIPIO
 	bool "Enable Support for Qualcomm Technologies, Inc. WAIPIO"
 	depends on ARCH_QCOM
@@ -240,12 +256,27 @@ config ARCH_WAIPIO
 	  WAIPIO chipset. If you do not wish to build a kernel that
 	  runs on this chipset or if you are unsure, say 'N' here.
 
+config ARCH_BENGAL
+	bool "Enable Support for Qualcomm Technologies, Inc. BENGAL"
+	depends on ARCH_QCOM
+	help
+	  This enables support for the BENGAL chipset. If you do not
+	  wish to build a kernel that runs on this chipset, say 'N' here.
+
 config ARCH_KHAJE
 	bool "Enable Support for Qualcomm Technologies, Inc. KHAJE"
 	depends on ARCH_QCOM
 	help
 	  This enables support for the KHAJE chipset. If you do not
 	  wish to build a kernel that runs on this chipset, say 'N' here.
+
+config ARCH_MONACO
+	bool "Enable Support for Qualcomm Technologies, Inc. MONACO"
+	depends on ARCH_QCOM
+	help
+	  This enables support for the Qualcomm Technologies, Inc.'s
+	  MONACO chipset. If you do not wish to build a kernel that
+	  runs on this chipset or if you are unsure, say 'N' here.
 
 config ARCH_CINDER
 	bool "Enable Support for Qualcomm Technologies, Inc. CINDER"
@@ -254,6 +285,15 @@ config ARCH_CINDER
 	  This enables support for the Qualcomm Technologies, Inc.
 	  CINDER chipset. If you do not wish to build a kernel that
 	  runs on this chipset or if you are unsure, say 'N' here.
+
+config ARCH_SDXPINN
+	bool "Enable Support for Qualcomm Technologies, Inc. SDXPINN"
+	depends on ARCH_QCOM
+	help
+	  This enables support for the Qualcomm Technologies, Inc.
+	  SDXPINN chipset. Say 'Y' for SDXPINN chipset. If you do not
+	  wish to build a kernel that runs on this chipset or if you
+	  are unsure, say 'N' here.
 
 config ARCH_SA8155
         bool "Enable Support for Qualcomm Technologies, Inc. SA8155"
@@ -278,6 +318,41 @@ config ARCH_SA6155
 	  This enables support for the Qualcomm Technologies, Inc.'s
 	  SA6155 chipset. If you do not wish to build a kernel that
 	  runs on this chipset or if you are unsure, say 'N' here.
+
+config QTI_QUIN_GVM
+	bool "Enable Support for Qualcomm Technologies, Inc. Auto GVMs on QUIN"
+	depends on ARCH_QCOM
+	help
+	  This enables support for the Qualcomm Technologies, Inc.'s
+	  Auto GVM on the QUIN platform. If you do not wish to build a
+	  kernel that runs this configuration or if you are unsure,
+	  say 'N' here.
+
+config ARCH_LEMANS
+	bool "Enable Support for Qualcomm Technologies, Inc. LEMANS"
+	depends on ARCH_QCOM
+	help
+	  This enables support for the Qualcomm Technologies, Inc.'s
+	  LEMANS chipset. If you do not wish to build a kernel that
+	  runs on this chipset or if you are unsure, say 'N' here.
+
+config ARCH_SA410M
+	bool "Enable Support for Qualcomm Technologies, Inc. SA410M"
+	depends on ARCH_QCOM
+	help
+	  This enables support for the Qualcomm Technologies, Inc.
+	  SA410M chipset. Say 'Y' for SA410M chipset. If you do not
+	  wish to build a kernel that runs on this chipset or if you
+	  are unsure, say 'N' here
+
+config ARCH_SCUBA_AUTO
+	bool "Enable Support for Qualcomm Technologies, Inc. SCUBA AUTO"
+	depends on ARCH_QCOM
+	help
+	  This enables support for the Qualcomm Technologies, Inc.
+	  SA410M chipset. Say 'Y' for SCUBA_AUTO chipset. If you do not
+	  wish to build a kernel that runs on this chipset or if you
+	  are unsure, say 'N' here.
 
 config ARCH_REALTEK
 	bool "Realtek Platforms"

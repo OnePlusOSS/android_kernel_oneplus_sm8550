@@ -136,7 +136,7 @@ static const struct regulator_data pm8008_reg_data[PM8008_MAX_LDO] = {
 };
 
 static const struct reg_init_data pm8010_p300_reg_init_data[] = {
-	{0x55, 0x8A},
+	{0x55, 0x8C},
 	{0x77, 0x03},
 };
 
@@ -868,6 +868,29 @@ static int pm8008_parse_regulator(struct regmap *regmap, struct device *dev)
 		return -ENODATA;
 	}
 
+	if(pmic_subtype == PM8010_SUBTYPE) {
+		rc = pm8008_masked_write(regmap, 0x2C53,
+			0xFF, 0x85);
+		if (rc < 0) {
+			pr_err("Failed to write 0x2C53 register rc=%d\n",
+				rc);
+			return rc;
+		}
+		rc = pm8008_masked_write(regmap, 0x2C50,
+			0xFF, 0x14);
+		if (rc < 0) {
+			pr_err("Failed to write 0x2C50 register rc=%d\n",
+				rc);
+			return rc;
+		}
+		rc = pm8008_masked_write(regmap, 0x4654,
+			0xFF, 0x5);
+		if (rc < 0) {
+			pr_err("Failed to write 0x4654 register rc=%d\n",
+				rc);
+			return rc;
+		}
+	}
 	/* parse each subnode and register regulator for regulator child */
 	for_each_available_child_of_node(dev->of_node, child) {
 		pm8008_reg = devm_kzalloc(dev, sizeof(*pm8008_reg), GFP_KERNEL);

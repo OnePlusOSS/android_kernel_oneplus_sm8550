@@ -436,3 +436,6 @@ config BT_VIRTIO
 	  kernel or say M to compile as a module.
 
 endmenu
+
+source "drivers/bluetooth/oplus_bt_bsa/Kconfig"
+

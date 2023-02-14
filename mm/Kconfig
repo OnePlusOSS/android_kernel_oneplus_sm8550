@@ -943,6 +943,7 @@ config LRU_GEN_STATS
 # }
 
 source "mm/damon/Kconfig"
+source "mm/oplus_mm/Kconfig"
 
 config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
        def_bool n

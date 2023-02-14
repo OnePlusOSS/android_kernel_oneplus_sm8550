@@ -10,6 +10,7 @@ config ARM64
 	select ACPI_SPCR_TABLE if ACPI
 	select ACPI_PPTT if ACPI
 	select ARCH_HAS_DEBUG_WX
+	select ARCH_BINFMT_ELF_EXTRA_PHDRS
 	select ARCH_BINFMT_ELF_STATE
 	select ARCH_ENABLE_HUGEPAGE_MIGRATION if HUGETLB_PAGE && MIGRATION
 	select ARCH_ENABLE_MEMORY_HOTPLUG
@@ -125,6 +126,7 @@ config ARM64
 	select GENERIC_FIND_FIRST_BIT
 	select GENERIC_IDLE_POLL_SETUP
 	select GENERIC_IRQ_IPI
+	select ARCH_WANTS_IRQ_RAW
 	select GENERIC_IRQ_PROBE
 	select GENERIC_IRQ_SHOW
 	select GENERIC_IRQ_SHOW_LEVEL
@@ -1075,6 +1077,18 @@ config ARM64_PA_BITS
 	default 48 if ARM64_PA_BITS_48
 	default 52 if ARM64_PA_BITS_52
 
+config ARM64_MEMMAP_ON_MEMORY
+	bool "Support memmap_on_memory"
+	default n
+	depends on MHP_MEMMAP_ON_MEMORY
+	depends on !HUGETLB_PAGE
+	help
+	  Adjust the ARM64 section size such that the size of the
+	  struct page array (the memmap) for a memory block is aligned to
+	  pageblock_nr_pages. When hotplugging memory, this allows the
+	  memmap to be allocated from within the new memory block thus
+	  reducing pressure on existing memory blocks.
+
 choice
 	prompt "Endianness"
 	default CPU_LITTLE_ENDIAN
@@ -1096,6 +1110,14 @@ config CPU_LITTLE_ENDIAN
 	  This is usually the case for distributions targeting arm64.
 
 endchoice
+
+config ARM64_KMALLOC64
+	bool "Use kmalloc-64"
+	help
+	  Some ARM64 cpus may use a 64 byte cacheline instead of 128 byte.
+	  This allows the smallest kmalloc cache to be 64 bytes, which
+	  can save memory for allocations smaller than 64 bytes.
+	  Say N if unsure.
 
 config SCHED_MC
 	bool "Multi-core scheduler support"

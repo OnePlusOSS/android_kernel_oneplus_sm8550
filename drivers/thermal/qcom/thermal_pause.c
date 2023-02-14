@@ -14,6 +14,7 @@
 #include <linux/suspend.h>
 #include <linux/cpumask.h>
 #include <linux/sched/walt.h>
+#include "thermal_zone_internal.h"
 
 enum thermal_pause_levels {
 	THERMAL_NO_CPU_PAUSE,
@@ -107,7 +108,7 @@ static int thermal_pause_work(struct thermal_pause_cdev *thermal_pause_cdev)
 	pr_debug("Pause:%*pbl\n", cpumask_pr_args(&thermal_pause_cdev->cpu_mask));
 
 	mutex_unlock(&cpus_pause_lock);
-	ret = walt_pause_cpus(&cpus_to_pause);
+	ret = walt_pause_cpus(&cpus_to_pause, PAUSE_THERMAL);
 	mutex_lock(&cpus_pause_lock);
 
 	if (ret == 0) {
@@ -154,7 +155,7 @@ static int thermal_resume_work(struct thermal_pause_cdev *thermal_pause_cdev)
 	pr_debug("Unpause:%*pbl\n", cpumask_pr_args(&cpus_to_unpause));
 
 	mutex_unlock(&cpus_pause_lock);
-	ret = walt_resume_cpus(&cpus_to_unpause);
+	ret = walt_resume_cpus(&cpus_to_unpause, PAUSE_THERMAL);
 	mutex_lock(&cpus_pause_lock);
 
 	if (ret == 0) {
@@ -391,6 +392,13 @@ static int thermal_pause_probe(struct platform_device *pdev)
 	unsigned long mask = 0;
 	const char *alias;
 
+	/*
+	 * cpu pause is first thermal cooling device driver
+	 * which modeprobe in early boot up, hence just register
+	 * for vendor hook to disable cooling stats
+	 */
+	thermal_vendor_hooks_init();
+
 	INIT_LIST_HEAD(&thermal_pause_cdev_list);
 	cpumask_clear(&cpus_in_max_cooling_level);
 
@@ -456,6 +464,8 @@ static int thermal_pause_remove(struct platform_device *pdev)
 {
 	struct thermal_pause_cdev *thermal_pause_cdev = NULL, *next = NULL;
 	int ret = 0;
+
+	thermal_vendor_hooks_exit();
 
 	if (cpu_hp_online) {
 		cpuhp_remove_state_nocalls(cpu_hp_online);

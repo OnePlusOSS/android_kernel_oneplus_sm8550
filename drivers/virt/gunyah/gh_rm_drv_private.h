@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef __GH_RM_DRV_PRIVATE_H
@@ -92,6 +93,11 @@ struct gh_vm_property {
 
 /* Message IDs: vRTC Configuration */
 #define GH_RM_RPC_MSG_ID_CALL_VM_SET_TIME_BASE		0x56000030
+
+/* Message IDs: Minidump */
+#define GH_RM_RPC_MSG_ID_CALL_VM_MINIDUMP_GET_INFO		0x56000040
+#define GH_RM_RPC_MSG_ID_CALL_VM_MINIDUMP_REGISTER_RANGE	0x56000041
+#define GH_RM_RPC_MSG_ID_CALL_VM_MINIDUMP_DEREGISTER_SLOT	0x56000042
 
 /* Message IDs: VM Configuration */
 #define GH_RM_RPC_MSG_ID_CALL_VM_IRQ_ACCEPT		0x56000050
@@ -267,6 +273,7 @@ struct gh_vm_lookup_resp_payload {
 #define GH_RM_RES_TYPE_VCPU		4
 #define GH_RM_RES_TYPE_VPMGRP		5
 #define GH_RM_RES_TYPE_VIRTIO_MMIO	6
+#define GH_RM_RES_TYPE_WATCHDOG		8
 
 struct gh_vm_get_hyp_res_req_payload {
 	gh_vmid_t vmid;
@@ -396,11 +403,28 @@ struct gh_mem_accept_req_payload_hdr {
 	u32 validate_label;
 } __packed;
 
+#define GH_MEM_ACCEPT_RESP_INCOMPLETE BIT(0)
+/*
+ * Identical to gh_sgl_desc except a reserved field is replaced with flags.
+ */
 struct gh_mem_accept_resp_payload {
 	u16 n_sgl_entries;
-	u16 reserved;
+	u8 flags;
+	u8 reserved;
 } __packed;
 
+/*
+ * Mem Accept may not be able to return the sgl_desc in a single call.
+ * These helpers gather the results across many calls.
+ */
+struct gh_sgl_frag_entry {
+	struct list_head list;
+	struct gh_sgl_desc *sgl_desc;
+};
+struct gh_sgl_fragment {
+	struct list_head list;
+	u16 n_sgl_entries;
+};
 /*
  * Call: MEM_LEND/MEM_SHARE
  *
@@ -439,6 +463,36 @@ struct gh_mem_notify_req_payload {
 	u32 flags:8;
 	u32 reserved1:24;
 	gh_label_t mem_info_tag;
+} __packed;
+
+/* End Message ID headers */
+
+/* Call: MINIDUMP_REGISTER_RANGE */
+struct gh_minidump_get_info_req_payload {
+	u32 reserved;
+} __packed;
+
+struct gh_minidump_get_info_resp_payload {
+	u16 slot_num;
+	u16 reserved;
+} __packed;
+
+struct gh_minidump_register_range_req_hdr {
+	u64 base_ipa;
+	u64 region_size;
+	u32 name_size : 8;
+	u32 name_offset : 8;
+	u32 reserved : 16;
+} __packed;
+
+struct gh_minidump_register_range_resp_payload {
+	u16 slot_num;
+	u16 reserved;
+} __packed;
+
+struct gh_minidump_deregister_slot_req_payload {
+	u16 slot_num;
+	u16 reserved;
 } __packed;
 
 /* End Message ID headers */

@@ -7,7 +7,8 @@
 #define _TRACE_HOOK_TRAPS_H
 #include <trace/hooks/vendor_hooks.h>
 
-struct pt_regs;
+/* struct pt_regs */
+#include <asm/ptrace.h>
 DECLARE_RESTRICTED_HOOK(android_rvh_do_undefinstr,
 	TP_PROTO(struct pt_regs *regs),
 	TP_ARGS(regs),
@@ -25,6 +26,10 @@ DECLARE_RESTRICTED_HOOK(android_rvh_panic_unhandled,
 DECLARE_RESTRICTED_HOOK(android_rvh_arm64_serror_panic,
 	TP_PROTO(struct pt_regs *regs, unsigned int esr),
 	TP_ARGS(regs, esr), 1);
+
+DECLARE_RESTRICTED_HOOK(android_rvh_do_serror,
+	TP_PROTO(struct pt_regs *regs, unsigned int esr, int *ret),
+	TP_ARGS(regs, esr, ret), 1);
 
 #endif /* _TRACE_HOOK_TRAPS_H */
 /* This part must be outside protection */
