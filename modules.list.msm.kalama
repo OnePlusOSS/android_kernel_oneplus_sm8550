@@ -131,3 +131,4 @@ qpnp-power-on.ko
 nvme-core.ko
 nvme.ko
 oplus_fdleak_check.ko
+qcom_enhance_watchdog.ko
