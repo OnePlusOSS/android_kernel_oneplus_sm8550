@@ -2097,6 +2097,13 @@ static int haptics_update_memory_data(struct haptics_chip *chip,
 	u32 left;
 	u8 tmp[HAP_PTN_FIFO_DIN_NUM] = {0};
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	if (data == NULL) {
+		dev_err(chip->dev, "no FIFO data available\n");
+		return -EINVAL;
+	}
+#endif
+
 	if (!length)
 		return 0;
 
@@ -3758,9 +3765,16 @@ static irqreturn_t fifo_empty_irq_handler(int irq, void *data)
 			}
 
 			while (num_rt > 0 && atomic_read(&chip->richtap_mode)) {
+				if ((chip->current_buf->length - chip->pos) <= 0) {
+					schedule_work(&chip->richtap_erase_work);
+					dev_err(chip->dev,"length=%d,pos=%d\n", chip->current_buf->length,chip->pos);
+					break;
+				}
 				if ((chip->current_buf->status == MMAP_BUF_DATA_VALID)
 					&& (num_rt >= (chip->current_buf->length - chip->pos))) {
 					samples_left = (u32)(chip->current_buf->length - chip->pos);
+					samples_left -=
+							(samples_left % HAP_PTN_FIFO_DIN_NUM);
 					rc = haptics_update_fifo_samples(chip,
 						&chip->current_buf->data[chip->pos], samples_left, true);
 					if (rc < 0) {
@@ -3777,6 +3791,7 @@ static irqreturn_t fifo_empty_irq_handler(int irq, void *data)
 				}
 
 				if (chip->current_buf->status == MMAP_BUF_DATA_VALID) {
+					num_rt -= (num_rt % HAP_PTN_FIFO_DIN_NUM);
 					rc = haptics_update_fifo_samples(chip,
 						&chip->current_buf->data[chip->pos], (u32)num_rt, true);
 					if (rc < 0) {
@@ -6572,7 +6587,7 @@ static long richtap_file_unlocked_ioctl(struct file *file, unsigned int cmd, uns
 	uint32_t tmp;
 	int ret = 0;
 
-#ifndef OPLUS_FEATURE_CHG_BASIC
+#ifdef OPLUS_FEATURE_CHG_BASIC
 	dev_err(chip->dev, "%s: cmd=0x%x, arg=0x%lx\n",
 			  __func__, cmd, arg);
 #endif
