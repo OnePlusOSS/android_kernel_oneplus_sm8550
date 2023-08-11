@@ -324,6 +324,17 @@
  */
 
 /**
+ * DOC: Multi-Link Operation
+ *
+ * In Multi-Link Operation, a connection between to MLDs utilizes multiple
+ * links. To use this in nl80211, various commands and responses now need
+ * to or will include the new %NL80211_ATTR_MLO_LINKS attribute.
+ * Additionally, various commands that need to operate on a specific link
+ * now need to be given the %NL80211_ATTR_MLO_LINK_ID attribute, e.g. to
+ * use %NL80211_CMD_START_AP or similar functions.
+ */
+
+/**
  * enum nl80211_commands - supported nl80211 commands
  *
  * @NL80211_CMD_UNSPEC: unspecified command to catch errors
@@ -366,14 +377,22 @@
  *	the non-transmitting interfaces are deleted as well.
  *
  * @NL80211_CMD_GET_KEY: Get sequence counter information for a key specified
- *	by %NL80211_ATTR_KEY_IDX and/or %NL80211_ATTR_MAC.
+ *	by %NL80211_ATTR_KEY_IDX and/or %NL80211_ATTR_MAC. %NL80211_ATTR_MAC
+ *	represents peer's MLD address for MLO pairwise key. For MLO group key,
+ *	the link is identified by %NL80211_ATTR_MLO_LINK_ID.
  * @NL80211_CMD_SET_KEY: Set key attributes %NL80211_ATTR_KEY_DEFAULT,
  *	%NL80211_ATTR_KEY_DEFAULT_MGMT, or %NL80211_ATTR_KEY_THRESHOLD.
+ *	For MLO connection, the link to set default key is identified by
+ *	%NL80211_ATTR_MLO_LINK_ID.
  * @NL80211_CMD_NEW_KEY: add a key with given %NL80211_ATTR_KEY_DATA,
  *	%NL80211_ATTR_KEY_IDX, %NL80211_ATTR_MAC, %NL80211_ATTR_KEY_CIPHER,
- *	and %NL80211_ATTR_KEY_SEQ attributes.
+ *	and %NL80211_ATTR_KEY_SEQ attributes. %NL80211_ATTR_MAC represents
+ *	peer's MLD address for MLO pairwise key. The link to add MLO
+ *	group key is identified by %NL80211_ATTR_MLO_LINK_ID.
  * @NL80211_CMD_DEL_KEY: delete a key identified by %NL80211_ATTR_KEY_IDX
- *	or %NL80211_ATTR_MAC.
+ *	or %NL80211_ATTR_MAC. %NL80211_ATTR_MAC represents peer's MLD address
+ *	for MLO pairwise key. The link to delete group key is identified by
+ *	%NL80211_ATTR_MLO_LINK_ID.
  *
  * @NL80211_CMD_GET_BEACON: (not used)
  * @NL80211_CMD_SET_BEACON: change the beacon on an access point interface
@@ -753,6 +772,13 @@
  *	%NL80211_ATTR_CSA_C_OFFSETS_TX is an array of offsets to CSA
  *	counters which will be updated to the current value. This attribute
  *	is used during CSA period.
+ *	For TX on an MLD, the frequency can be omitted and the link ID be
+ *	specified, or if transmitting to a known peer MLD (with MLD addresses
+ *	in the frame) both can be omitted and the link will be selected by
+ *	lower layers.
+ *	For RX notification, %NL80211_ATTR_RX_HW_TIMESTAMP may be included to
+ *	indicate the frame RX timestamp and %NL80211_ATTR_TX_HW_TIMESTAMP may
+ *	be included to indicate the ack TX timestamp.
  * @NL80211_CMD_FRAME_WAIT_CANCEL: When an off-channel TX was requested, this
  *	command may be used with the corresponding cookie to cancel the wait
  *	time if it is known that it is no longer necessary.  This command is
@@ -763,7 +789,9 @@
  *	transmitted with %NL80211_CMD_FRAME. %NL80211_ATTR_COOKIE identifies
  *	the TX command and %NL80211_ATTR_FRAME includes the contents of the
  *	frame. %NL80211_ATTR_ACK flag is included if the recipient acknowledged
- *	the frame.
+ *	the frame. %NL80211_ATTR_TX_HW_TIMESTAMP may be included to indicate the
+ *	tx timestamp and %NL80211_ATTR_RX_HW_TIMESTAMP may be included to
+ *	indicate the ack RX timestamp.
  * @NL80211_CMD_ACTION_TX_STATUS: Alias for @NL80211_CMD_FRAME_TX_STATUS for
  *	backward compatibility.
  *
@@ -1108,6 +1136,12 @@
  *	has been received. %NL80211_ATTR_FRAME is used to specify the
  *	frame contents.  The frame is the raw EAPoL data, without ethernet or
  *	802.11 headers.
+ *	For an MLD transmitter, the %NL80211_ATTR_MLO_LINK_ID may be given and
+ *	its effect will depend on the destination: If the destination is known
+ *	to be an MLD, this will be used as a hint to select the link to transmit
+ *	the frame on. If the destination is not an MLD, this will select both
+ *	the link to transmit on and the source address will be set to the link
+ *	address of that link.
  *	When used as an event indication %NL80211_ATTR_CONTROL_PORT_ETHERTYPE,
  *	%NL80211_ATTR_CONTROL_PORT_NO_ENCRYPT and %NL80211_ATTR_MAC are added
  *	indicating the protocol type of the received frame; whether the frame
@@ -1236,6 +1270,16 @@
  *      temporal rejection with comeback. The event includes %NL80211_ATTR_MAC
  *      to describe the BSSID address of the AP and %NL80211_ATTR_TIMEOUT to
  *      specify the timeout value.
+ *
+ * @NL80211_CMD_ADD_LINK: Add a new link to an interface. The
+ *	%NL80211_ATTR_MLO_LINK_ID attribute is used for the new link.
+ * @NL80211_CMD_REMOVE_LINK: Remove a link from an interface. This may come
+ *	without %NL80211_ATTR_MLO_LINK_ID as an easy way to remove all links
+ *	in preparation for e.g. roaming to a regular (non-MLO) AP.
+ *
+ * @NL80211_CMD_ADD_LINK_STA: Add a link to an MLD station
+ * @NL80211_CMD_MODIFY_LINK_STA: Modify a link of an MLD station
+ * @NL80211_CMD_REMOVE_LINK_STA: Remove a link of an MLD station
  *
  * @NL80211_CMD_MAX: highest used command number
  * @__NL80211_CMD_AFTER_LAST: internal use
@@ -1480,6 +1524,19 @@ enum nl80211_commands {
 	NL80211_CMD_SET_FILS_AAD,
 
 	NL80211_CMD_ASSOC_COMEBACK,
+
+	NL80211_CMD_ADD_LINK,
+	NL80211_CMD_REMOVE_LINK,
+
+	NL80211_CMD_ADD_LINK_STA,
+	NL80211_CMD_MODIFY_LINK_STA,
+	NL80211_CMD_REMOVE_LINK_STA,
+
+	NL80211_CMD_RESERVED_DO_NOT_USE_6 = 153,
+	NL80211_CMD_RESERVED_DO_NOT_USE_7 = 154,
+	NL80211_CMD_RESERVED_DO_NOT_USE_8 = 155,
+	NL80211_CMD_RESERVED_DO_NOT_USE_9 = 156,
+	NL80211_CMD_RESERVED_DO_NOT_USE_10 = 157,
 
 	/* add new commands above here */
 
@@ -2340,8 +2397,10 @@ enum nl80211_commands {
  *
  * @NL80211_ATTR_IFTYPE_EXT_CAPA: Nested attribute of the following attributes:
  *	%NL80211_ATTR_IFTYPE, %NL80211_ATTR_EXT_CAPA,
- *	%NL80211_ATTR_EXT_CAPA_MASK, to specify the extended capabilities per
- *	interface type.
+ *	%NL80211_ATTR_EXT_CAPA_MASK, to specify the extended capabilities and
+ *	other interface-type specific capabilities per interface type. For MLO,
+ *	%NL80211_ATTR_EML_CAPABILITY and %NL80211_ATTR_MLD_CAPA_AND_OPS are
+ *	present.
  *
  * @NL80211_ATTR_MU_MIMO_GROUP_DATA: array of 24 bytes that defines a MU-MIMO
  *	groupID for monitor mode.
@@ -2663,6 +2722,39 @@ enum nl80211_commands {
  *	association request when used with NL80211_CMD_NEW_STATION). Can be set
  *	only if %NL80211_STA_FLAG_WME is set.
  *
+ * @NL80211_ATTR_MAX_NUM_AKM_SUITES: U16 attribute. Indicates maximum number of
+ *	AKM suites allowed for %NL80211_CMD_CONNECT, %NL80211_CMD_ASSOCIATE and
+ *	%NL80211_CMD_START_AP in %NL80211_CMD_GET_WIPHY response. If this
+ *	attribute is not present userspace shall consider maximum number of AKM
+ *	suites allowed as %NL80211_MAX_NR_AKM_SUITES which is the legacy maximum
+ *	number prior to the introduction of this attribute.
+ *
+ * @NL80211_ATTR_MLO_LINK_ID: A (u8) link ID for use with MLO, to be used with
+ *	various commands that need a link ID to operate.
+ * @NL80211_ATTR_MLO_LINKS: A nested array of links, each containing some
+ *	per-link information and a link ID.
+ * @NL80211_ATTR_MLD_ADDR: An MLD address, used with various commands such as
+ *	authenticate/associate.
+ *
+ * @NL80211_ATTR_MLO_SUPPORT: Flag attribute to indicate user space supports MLO
+ *	connection. Used with %NL80211_CMD_CONNECT. If this attribute is not
+ *	included in NL80211_CMD_CONNECT drivers must not perform MLO connection.
+ *
+ * @NL80211_ATTR_EML_CAPABILITY: EML Capability information (u16)
+ * @NL80211_ATTR_MLD_CAPA_AND_OPS: MLD Capabilities and Operations (u16)
+ *
+ * @NL80211_ATTR_TX_HW_TIMESTAMP: Hardware timestamp for TX operation in
+ *	nanoseconds (u64). This is the device clock timestamp so it will
+ *	probably reset when the device is stopped or the firmware is reset.
+ *	When used with %NL80211_CMD_FRAME_TX_STATUS, indicates the frame TX
+ *	timestamp. When used with %NL80211_CMD_FRAME RX notification, indicates
+ *	the ack TX timestamp.
+ * @NL80211_ATTR_RX_HW_TIMESTAMP: Hardware timestamp for RX operation in
+ *	nanoseconds (u64). This is the device clock timestamp so it will
+ *	probably reset when the device is stopped or the firmware is reset.
+ *	When used with %NL80211_CMD_FRAME_TX_STATUS, indicates the ack RX
+ *	timestamp. When used with %NL80211_CMD_FRAME RX notification, indicates
+ *	the incoming frame RX timestamp.
  * @NUM_NL80211_ATTR: total number of nl80211_attrs available
  * @NL80211_ATTR_MAX: highest attribute number currently defined
  * @__NL80211_ATTR_AFTER_LAST: internal use
@@ -3175,6 +3267,39 @@ enum nl80211_attrs {
 
 	NL80211_ATTR_EHT_CAPABILITY,
 
+	NL80211_ATTR_DISABLE_EHT,
+
+	NL80211_ATTR_MLO_LINKS,
+	NL80211_ATTR_MLO_LINK_ID,
+	NL80211_ATTR_MLD_ADDR,
+
+	NL80211_ATTR_MLO_SUPPORT,
+
+	NL80211_ATTR_MAX_NUM_AKM_SUITES,
+
+	NL80211_ATTR_EML_CAPABILITY,
+	NL80211_ATTR_MLD_CAPA_AND_OPS,
+
+	NL80211_ATTR_TX_HW_TIMESTAMP,
+	NL80211_ATTR_RX_HW_TIMESTAMP,
+
+	NL80211_ATTR_RESERVED_DO_NOT_USE_10 = 321,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_11 = 322,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_12 = 323,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_13 = 324,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_14 = 325,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_15 = 326,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_16 = 327,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_17 = 328,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_18 = 329,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_19 = 330,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_20 = 331,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_21 = 332,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_22 = 333,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_23 = 334,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_24 = 335,
+	NL80211_ATTR_RESERVED_DO_NOT_USE_25 = 336,
+
 	/* add attributes here, update the policy in nl80211.c */
 
 	__NL80211_ATTR_AFTER_LAST,
@@ -3229,6 +3354,11 @@ enum nl80211_attrs {
 #define NL80211_HE_MIN_CAPABILITY_LEN           16
 #define NL80211_HE_MAX_CAPABILITY_LEN           54
 #define NL80211_MAX_NR_CIPHER_SUITES		5
+
+/*
+ * NL80211_MAX_NR_AKM_SUITES is obsolete when %NL80211_ATTR_MAX_NUM_AKM_SUITES
+ * present in %NL80211_CMD_GET_WIPHY response.
+ */
 #define NL80211_MAX_NR_AKM_SUITES		2
 #define NL80211_EHT_MIN_CAPABILITY_LEN          13
 #define NL80211_EHT_MAX_CAPABILITY_LEN          51
@@ -3522,6 +3652,11 @@ enum nl80211_rate_info {
 	NL80211_RATE_INFO_EHT_NSS,
 	NL80211_RATE_INFO_EHT_GI,
 	NL80211_RATE_INFO_EHT_RU_ALLOC,
+	NL80211_RATE_INFO_RESERVED_DO_NOT_USE_1 = 23,
+	NL80211_RATE_INFO_RESERVED_DO_NOT_USE_2 = 24,
+	NL80211_RATE_INFO_RESERVED_DO_NOT_USE_3 = 25,
+	NL80211_RATE_INFO_RESERVED_DO_NOT_USE_4 = 26,
+	NL80211_RATE_INFO_RESERVED_DO_NOT_USE_5 = 27,
 
 	/* keep last */
 	__NL80211_RATE_INFO_AFTER_LAST,
@@ -3552,6 +3687,9 @@ enum nl80211_sta_bss_param {
 	NL80211_STA_BSS_PARAM_SHORT_SLOT_TIME,
 	NL80211_STA_BSS_PARAM_DTIM_PERIOD,
 	NL80211_STA_BSS_PARAM_BEACON_INTERVAL,
+	NL80211_STA_BSS_PARAM_RESERVED_DO_NOT_USE_1 = 6,
+	NL80211_STA_BSS_PARAM_RESERVED_DO_NOT_USE_2 = 7,
+	NL80211_STA_BSS_PARAM_RESERVED_DO_NOT_USE_3 = 8,
 
 	/* keep last */
 	__NL80211_STA_BSS_PARAM_AFTER_LAST,
@@ -3686,6 +3824,11 @@ enum nl80211_sta_info {
 	NL80211_STA_INFO_AIRTIME_LINK_METRIC,
 	NL80211_STA_INFO_ASSOC_AT_BOOTTIME,
 	NL80211_STA_INFO_CONNECTED_TO_AS,
+	NL80211_STA_INFO_RESERVED_DO_NOT_USE_1 = 44,
+	NL80211_STA_INFO_RESERVED_DO_NOT_USE_2 = 45,
+	NL80211_STA_INFO_RESERVED_DO_NOT_USE_3 = 46,
+	NL80211_STA_INFO_RESERVED_DO_NOT_USE_4 = 47,
+	NL80211_STA_INFO_RESERVED_DO_NOT_USE_5 = 48,
 
 	/* keep last */
 	__NL80211_STA_INFO_AFTER_LAST,
@@ -3861,6 +4004,11 @@ enum nl80211_band_iftype_attr {
 	NL80211_BAND_IFTYPE_ATTR_EHT_CAP_PHY,
 	NL80211_BAND_IFTYPE_ATTR_EHT_CAP_MCS_SET,
 	NL80211_BAND_IFTYPE_ATTR_EHT_CAP_PPE,
+	NL80211_BAND_IFTYPE_ATTR_RESERVED_DO_NOT_USE_1 = 12,
+	NL80211_BAND_IFTYPE_ATTR_RESERVED_DO_NOT_USE_2 = 13,
+	NL80211_BAND_IFTYPE_ATTR_RESERVED_DO_NOT_USE_3 = 14,
+	NL80211_BAND_IFTYPE_ATTR_RESERVED_DO_NOT_USE_4 = 15,
+	NL80211_BAND_IFTYPE_ATTR_RESERVED_DO_NOT_USE_5 = 16,
 
 	/* keep last */
 	__NL80211_BAND_IFTYPE_ATTR_AFTER_LAST,
@@ -3909,6 +4057,10 @@ enum nl80211_band_attr {
 
 	NL80211_BAND_ATTR_EDMG_CHANNELS,
 	NL80211_BAND_ATTR_EDMG_BW_CONFIG,
+
+	NL80211_BAND_ATTR_RESERVED_DO_NOT_USE_1 = 12,
+	NL80211_BAND_ATTR_RESERVED_DO_NOT_USE_2 = 13,
+	NL80211_BAND_ATTR_RESERVED_DO_NOT_USE_3 = 14,
 
 	/* keep last */
 	__NL80211_BAND_ATTR_AFTER_LAST,
@@ -4851,6 +5003,8 @@ enum nl80211_bss_scan_width {
  *	Contains a nested array of signal strength attributes (u8, dBm),
  *	using the nesting index as the antenna number.
  * @NL80211_BSS_FREQUENCY_OFFSET: frequency offset in KHz
+ * @NL80211_BSS_MLO_LINK_ID: MLO link ID of the BSS (u8).
+ * @NL80211_BSS_MLD_ADDR: MLD address of this BSS if connected to it.
  * @__NL80211_BSS_AFTER_LAST: internal
  * @NL80211_BSS_MAX: highest BSS attribute
  */
@@ -4876,6 +5030,11 @@ enum nl80211_bss {
 	NL80211_BSS_PARENT_BSSID,
 	NL80211_BSS_CHAIN_SIGNAL,
 	NL80211_BSS_FREQUENCY_OFFSET,
+	NL80211_BSS_MLO_LINK_ID,
+	NL80211_BSS_MLD_ADDR,
+	NL80211_BSS_RESERVED_DO_NOT_USE_3 = 23,
+	NL80211_BSS_RESERVED_DO_NOT_USE_4 = 24,
+	NL80211_BSS_RESERVED_DO_NOT_USE_5 = 25,
 
 	/* keep last */
 	__NL80211_BSS_AFTER_LAST,
@@ -5021,6 +5180,11 @@ enum nl80211_key_attributes {
 	NL80211_KEY_DEFAULT_TYPES,
 	NL80211_KEY_MODE,
 	NL80211_KEY_DEFAULT_BEACON,
+	NL80211_KEY_RESERVED_DO_NOT_USE_1 = 11,
+	NL80211_KEY_RESERVED_DO_NOT_USE_2 = 12,
+	NL80211_KEY_RESERVED_DO_NOT_USE_3 = 13,
+	NL80211_KEY_RESERVED_DO_NOT_USE_4 = 14,
+	NL80211_KEY_RESERVED_DO_NOT_USE_5 = 15,
 
 	/* keep last */
 	__NL80211_KEY_AFTER_LAST,
@@ -5055,6 +5219,11 @@ enum nl80211_tx_rate_attributes {
 	NL80211_TXRATE_HE,
 	NL80211_TXRATE_HE_GI,
 	NL80211_TXRATE_HE_LTF,
+	NL80211_TXRATE_RESERVED_DO_NOT_USE_1 = 8,
+	NL80211_TXRATE_RESERVED_DO_NOT_USE_2 = 9,
+	NL80211_TXRATE_RESERVED_DO_NOT_USE_3 = 10,
+	NL80211_TXRATE_RESERVED_DO_NOT_USE_4 = 11,
+	NL80211_TXRATE_RESERVED_DO_NOT_USE_5 = 12,
 
 	/* keep last */
 	__NL80211_TXRATE_AFTER_LAST,
@@ -6172,6 +6341,17 @@ enum nl80211_feature_flags {
  * @NL80211_EXT_FEATURE_RADAR_BACKGROUND: Device supports background radar/CAC
  *	detection.
  *
+ * @NL80211_EXT_FEATURE_POWERED_ADDR_CHANGE: Device can perform a MAC address
+ *	change without having to bring the underlying network device down
+ *	first. For example, in station mode this can be used to vary the
+ *	origin MAC address prior to a connection to a new AP for privacy
+ *	or other reasons. Note that certain driver specific restrictions
+ *	might apply, e.g. no scans in progress, no offchannel operations
+ *	in progress, and no active connections.
+ *
+ * @NL80211_EXT_FEATURE_AUTH_TX_RANDOM_TA: Device supports randomized TA
+ *	for authentication frames in @NL80211_CMD_FRAME.
+ *
  * @NUM_NL80211_EXT_FEATURES: number of extended features.
  * @MAX_NL80211_EXT_FEATURES: highest extended feature index.
  */
@@ -6239,6 +6419,16 @@ enum nl80211_ext_feature_index {
 	NL80211_EXT_FEATURE_BSS_COLOR,
 	NL80211_EXT_FEATURE_FILS_CRYPTO_OFFLOAD,
 	NL80211_EXT_FEATURE_RADAR_BACKGROUND,
+	NL80211_EXT_FEATURE_POWERED_ADDR_CHANGE,
+	NL80211_EXT_FEATURE_AUTH_TX_RANDOM_TA,
+	NL80211_EXT_FEATURE_RESERVED_DO_NOT_USE_3 = 64,
+	NL80211_EXT_FEATURE_RESERVED_DO_NOT_USE_4 = 65,
+	NL80211_EXT_FEATURE_RESERVED_DO_NOT_USE_5 = 66,
+	NL80211_EXT_FEATURE_RESERVED_DO_NOT_USE_6 = 67,
+	NL80211_EXT_FEATURE_RESERVED_DO_NOT_USE_7 = 68,
+	NL80211_EXT_FEATURE_RESERVED_DO_NOT_USE_8 = 69,
+	NL80211_EXT_FEATURE_RESERVED_DO_NOT_USE_9 = 70,
+	NL80211_EXT_FEATURE_RESERVED_DO_NOT_USE_10 = 71,
 
 	/* add new features before the definition below */
 	NUM_NL80211_EXT_FEATURES,
@@ -6543,6 +6733,9 @@ enum nl80211_tdls_peer_capability {
 	NL80211_TDLS_PEER_VHT = 1<<1,
 	NL80211_TDLS_PEER_WMM = 1<<2,
 	NL80211_TDLS_PEER_HE = 1<<3,
+	NL80211_TDLS_PEER_RESERVED_DO_NOT_USE_1 = 1<<4,
+	NL80211_TDLS_PEER_RESERVED_DO_NOT_USE_2 = 1<<5,
+	NL80211_TDLS_PEER_RESERVED_DO_NOT_USE_3 = 1<<6,
 };
 
 /**

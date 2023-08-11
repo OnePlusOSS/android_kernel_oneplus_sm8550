@@ -106,14 +106,6 @@ void __init kvm_hyp_reserve(void)
 }
 
 /*
- * Updates the state of the host's version of the vcpu state.
- */
-static void update_vcpu_state(struct kvm_vcpu *vcpu, int shadow_handle)
-{
-	vcpu->arch.pkvm.shadow_handle = shadow_handle;
-}
-
-/*
  * Allocates and donates memory for EL2 shadow structs.
  *
  * Allocates space for the shadow state, which includes the shadow vm as well as
@@ -125,12 +117,12 @@ static void update_vcpu_state(struct kvm_vcpu *vcpu, int shadow_handle)
  */
 static int __create_el2_shadow(struct kvm *kvm)
 {
-	struct kvm_vcpu *vcpu, **vcpu_array;
-	size_t pgd_sz, shadow_sz;
+	struct kvm_vcpu *vcpu;
+	size_t pgd_sz, shadow_sz, vcpu_state_sz;
 	void *pgd, *shadow_addr;
 	unsigned long idx;
 	int shadow_handle;
-	int ret, i;
+	int ret;
 
 	if (kvm->created_vcpus < 1)
 		return -EINVAL;
@@ -145,20 +137,14 @@ static int __create_el2_shadow(struct kvm *kvm)
 	if (!pgd)
 		return -ENOMEM;
 
-	/* Allocate memory to donate to hyp for the kvm and vcpu state. */
+	/* Allocate memory to donate to hyp for the kvm and vcpu state pointers. */
 	shadow_sz = PAGE_ALIGN(KVM_SHADOW_VM_SIZE +
-			       SHADOW_VCPU_STATE_SIZE * kvm->created_vcpus);
+			       sizeof(void *) * kvm->created_vcpus);
 	shadow_addr = alloc_pages_exact(shadow_sz, GFP_KERNEL_ACCOUNT);
 	if (!shadow_addr) {
 		ret = -ENOMEM;
 		goto free_pgd;
 	}
-
-	/* Stash the vcpu pointers into the PGD */
-	BUILD_BUG_ON(KVM_MAX_VCPUS > (PAGE_SIZE / sizeof(u64)));
-	vcpu_array = pgd;
-	kvm_for_each_vcpu(idx, vcpu, kvm)
-		vcpu_array[idx] = vcpu;
 
 	/* Donate the shadow memory to hyp and let hyp initialize it. */
 	ret = kvm_call_hyp_nvhe(__pkvm_init_shadow, kvm, shadow_addr, shadow_sz,
@@ -171,12 +157,35 @@ static int __create_el2_shadow(struct kvm *kvm)
 	/* Store the shadow handle given by hyp for future call reference. */
 	kvm->arch.pkvm.shadow_handle = shadow_handle;
 
-	/* Adjust host's vcpu state as it doesn't control it anymore. */
-	for (i = 0; i < kvm->created_vcpus; i++)
-		update_vcpu_state(kvm->vcpus[i], shadow_handle);
+	/* Donate memory for the vcpu state at hyp and initialize it. */
+	vcpu_state_sz = PAGE_ALIGN(SHADOW_VCPU_STATE_SIZE);
+	kvm_for_each_vcpu (idx, vcpu, kvm) {
+		void *vcpu_state;
+
+		/* Indexing of the vcpus to be sequential starting at 0. */
+		if (WARN_ON(vcpu->vcpu_idx != idx)) {
+			ret = -EINVAL;
+			goto destroy_vm;
+		}
+		vcpu_state = alloc_pages_exact(vcpu_state_sz, GFP_KERNEL_ACCOUNT);
+		if (!vcpu_state) {
+			ret = -ENOMEM;
+			goto destroy_vm;
+		}
+
+		ret = kvm_call_hyp_nvhe(__pkvm_init_shadow_vcpu, shadow_handle,
+					vcpu, vcpu_state);
+		if (ret) {
+			free_pages_exact(vcpu_state, vcpu_state_sz);
+			goto destroy_vm;
+		}
+	}
 
 	return 0;
 
+destroy_vm:
+	kvm_shadow_destroy(kvm);
+	return ret;
 free_shadow:
 	free_pages_exact(shadow_addr, shadow_sz);
 free_pgd:

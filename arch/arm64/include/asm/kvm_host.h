@@ -214,9 +214,6 @@ struct kvm_arch {
 };
 
 struct kvm_protected_vcpu {
-	/* A unique id to the shadow structs in the hyp shadow area. */
-	int shadow_handle;
-
 	/* A pointer to the host's vcpu. */
 	struct kvm_vcpu *host_vcpu;
 
@@ -940,6 +937,10 @@ bool kvm_arm_vcpu_is_finalized(struct kvm_vcpu *vcpu);
 	 test_bit(KVM_ARCH_FLAG_MTE_ENABLED, &(kvm)->arch.flags))
 #define kvm_vcpu_has_pmu(vcpu)					\
 	(test_bit(KVM_ARM_VCPU_PMU_V3, (vcpu)->arch.features))
+
+#define kvm_supports_32bit_el0()				\
+	(system_supports_32bit_el0() &&				\
+	 !static_branch_unlikely(&arm64_mismatched_32bit_el0))
 
 int kvm_trng_call(struct kvm_vcpu *vcpu);
 #ifdef CONFIG_KVM

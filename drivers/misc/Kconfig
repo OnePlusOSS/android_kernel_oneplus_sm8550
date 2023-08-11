@@ -485,6 +485,14 @@ config HISI_HIKEY_USB
 	  switching between the dual-role USB-C port and the USB-A host ports
 	  using only one USB controller.
 
+config QSEECOM_PROXY
+	tristate "To enable qseecom proxy driver for kernel client"
+	help
+	 qseecom proxy driver serves the kernel clients by providing
+	 required ops via call back functions with a minimal framework.
+	 These callback functions can be used to start, shutdown and
+	 send commands to the trusted apps.
+
 config OPEN_DICE
 	tristate "Open Profile for DICE driver"
 	depends on OF_RESERVED_MEM
@@ -496,6 +504,43 @@ config OPEN_DICE
 	  and sealing.
 
 	  If unsure, say N.
+
+#ifdef OPLUS_FEATURE_RF_CABLE_DETECT
+config OPLUS_RF_CABLE_MONITOR
+	tristate "OPLUS rf cable monitor system"
+	depends on OF
+	select PINMUX
+	default n
+	help
+	  Say Y here to enable OPLUS rf cable monitor system support
+#endif /* OPLUS_FEATURE_RF_CABLE_DETECT */
+#ifdef OPLUS_FEATURE_SIM_DETECT
+config SIM_DETECT
+	tristate "SIM_DETECT system"
+	default n
+	help
+	  Say Y here to enable sim detect system support
+#endif /* OPLUS_FEATURE_SIM_DETECT */
+
+#ifdef OPLUS_FEATURE_SIM_DETECT
+config OEM_QMI
+	tristate "oem qmi feature"
+	default n
+	help
+	  Say Y here to enable oem qmi support
+#endif /* OPLUS_FEATURE_SIM_DETECT */
+
+#change 'y' to 'n', if you want fo close this controller
+config OPLUS_GPIO
+    tristate "oplus gpio controller"
+    default n
+    help
+      define this config to control oplus gpio.
+
+config HAPTIC_FEEDBACK
+    tristate "Haptic driver feedback"
+    help
+      This option enables support for Haptic Driver Feedback.
 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
@@ -514,4 +559,5 @@ source "drivers/misc/cardreader/Kconfig"
 source "drivers/misc/habanalabs/Kconfig"
 source "drivers/misc/uacce/Kconfig"
 source "drivers/misc/pvpanic/Kconfig"
+source "drivers/misc/tri_state_key/Kconfig"
 endmenu

@@ -8,12 +8,20 @@
 #define _TRACE_HOOK_GIC_H
 
 #include <trace/hooks/vendor_hooks.h>
-struct gic_chip_data;
-struct irq_data;
 
-DECLARE_HOOK(android_vh_gic_resume,
-       TP_PROTO(struct gic_chip_data *gd),
-       TP_ARGS(gd));
+#ifdef __GENKSYMS__
+#include <linux/cpumask.h>
+#include <linux/irq.h>
+#include <linux/irqdomain.h>
+#endif
+
+struct cpumask;
+struct irq_data;
+struct irq_domain;
+
+DECLARE_HOOK(android_vh_gic_v2_resume,
+	TP_PROTO(struct irq_domain *domain, void __iomem *dist_base),
+	TP_ARGS(domain, dist_base));
 
 DECLARE_HOOK(android_vh_gic_set_affinity,
 	TP_PROTO(struct irq_data *d, const struct cpumask *mask_val,

@@ -24,4 +24,79 @@ source "drivers/soc/ux500/Kconfig"
 source "drivers/soc/versatile/Kconfig"
 source "drivers/soc/xilinx/Kconfig"
 
+config OPLUS_SYSTEM_KERNEL
+  bool "config oplus system feature "
+  default y
+  help
+	define this config to add oplus sytstem kernel feature
+
+#ifdef OPLUS_FEATURE_MM_FEEDBACK
+source "drivers/soc/oplus/multimedia/Kconfig"
+#endif /* OPLUS_FEATURE_MM_FEEDBACK */
+
+#ifdef OPLUS_FEATURE_SENSOR_SMEM
+source "drivers/soc/oplus/sensor/Kconfig"
+#endif /* OPLUS_FEATURE_SENSOR_SMEM */
+
+#ifdef OPLUS_FEATURE_SENSOR_CONSUMER_IR
+source "drivers/soc/oplus/oplus_consumer_ir/Kconfig"
+#endif /* OPLUS_FEATURE_SENSOR_CONSUMER_IR */
+
+#ifdef OPLUS_FEATURE_DFT
+source "drivers/soc/oplus/dft/Kconfig"
+#endif /* ifdef OPLUS_FEATURE_DFT */
+
+#ifdef OPLUS_FEATURE_DFR
+source "drivers/soc/oplus/dfr/Kconfig"
+#endif /* OPLUS_FEATURE_DFR */
+
+#ifdef OPLUS_FEATURE_BOOT
+source "drivers/soc/oplus/boot/Kconfig"
+#endif /* OPLUS_FEATURE_BOOT */
+
+#ifdef OPLUS_FEATURE_OCH
+source "kernel/oplus_cpu/cpufreq_health/Kconfig"
+#endif /* OPLUS_FEATURE_OCH */
+
+#ifdef OPLUS_FEATURE_OMRG
+source "kernel/oplus_cpu/oplus_omrg/Kconfig"
+#endif /* OPLUS_FEATURE_OMRG */
+
+#ifdef OPLUS_FEATURE_ATD
+source "kernel/oplus_cpu/detection/Kconfig"
+#endif /* OPLUS_FEATURE_ATD */
+
+#ifdef OPLUS_FEATURE_SUGOV_POWER_EFFIENCY
+source "kernel/oplus_cpu/cpufreq_effiency/Kconfig"
+#endif /* OPLUS_FEATURE_SUGOV_POWER_EFFIENCY */
+
+#ifdef OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING
+source "kernel/oplus_cpu/cpufreq_bouncing/Kconfig"
+#endif /* OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING */
+
+source "kernel/oplus_cpu/uad/Kconfig"
+
+#ifdef OPLUS_FEATURE_MDMFEATURE
+source "drivers/soc/oplus/mdmfeature/Kconfig"
+#endif /*OPLUS_FEATURE_MDMFEATURE*/
+
+#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
+source "drivers/soc/oplus/mdmrst/Kconfig"
+#endif /*OPLUS_FEATURE_MODEM_MINIDUMP*/
+
+#ifdef OPLUS_FEATURE_MIDAS
+source "drivers/soc/oplus/midas/Kconfig"
+#endif /*OPLUS_FEATURE_MIDAS*/
 endmenu
+
+#ifdef OPLUS_FEATURE_TP_BASIC
+source "drivers/soc/oplus/device_info/Kconfig"
+#endif /* OPLUS_FEATURE_TP_BASIC */
+
+#ifdef OPLUS_FEATURE_ABNORMAL_FLAG
+source "kernel/oplus_cpu/oplus_overload/Kconfig"
+#endif /* OPLUS_FEATURE_ABNORMAL_FLAgit G */
+
+#ifdef OPLUS_FREEZE_DEBUG
+source "drivers/soc/oplus/power/freeze_debug/Kconfig"
+#endif /* OPLUS_FREEZE_DEBUG */

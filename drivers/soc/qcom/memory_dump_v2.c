@@ -1059,7 +1059,7 @@ static int mem_dump_alloc(struct platform_device *pdev)
 	struct msm_dump_entry dump_entry;
 	struct md_region md_entry;
 	size_t total_size;
-	u32 size, id;
+	u32 size, id = 0;
 	int ret, no_of_nodes;
 	dma_addr_t dma_handle;
 	phys_addr_t phys_addr, mini_phys_addr;
@@ -1068,7 +1068,7 @@ static int mem_dump_alloc(struct platform_device *pdev)
 	uint32_t ns_vmids[] = {VMID_HLOS};
 	uint32_t ns_vm_perms[] = {PERM_READ | PERM_WRITE};
 	u64 shm_bridge_handle;
-	int initialized;
+	int initialized = 0;
 
 	if (mem_dump_reserve_mem(&pdev->dev) != 0)
 		return -ENOMEM;

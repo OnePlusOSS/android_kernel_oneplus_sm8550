@@ -19,6 +19,15 @@
 #define MSM_HW_FENCE_FLAG_ENABLED_BIT    31
 
 /**
+ * MSM_HW_FENCE_FLAG_SIGNALED_BIT - Hw-fence is signaled for the dma_fence.
+ *
+ * This flag is set by hw-fence driver when a client wants to add itself as
+ * a waiter for this hw-fence. The client uses this flag to avoid adding itself
+ * as a waiter for a fence that is already retired.
+ */
+#define MSM_HW_FENCE_FLAG_SIGNALED_BIT    30
+
+/**
  * MSM_HW_FENCE_ERROR_RESET - Hw-fence flagged as error due to forced reset from producer.
  */
 #define MSM_HW_FENCE_ERROR_RESET    BIT(0)
@@ -128,6 +137,13 @@ struct msm_hw_fence_mem_addr {
  * @HW_FENCE_CLIENT_ID_CTL3: DPU Client 3.
  * @HW_FENCE_CLIENT_ID_CTL4: DPU Client 4.
  * @HW_FENCE_CLIENT_ID_CTL5: DPU Client 5.
+ * @HW_FENCE_CLIENT_ID_VAL0: debug Validation client 0.
+ * @HW_FENCE_CLIENT_ID_VAL1: debug Validation client 1.
+ * @HW_FENCE_CLIENT_ID_VAL2: debug Validation client 2.
+ * @HW_FENCE_CLIENT_ID_VAL3: debug Validation client 3.
+ * @HW_FENCE_CLIENT_ID_VAL4: debug Validation client 4.
+ * @HW_FENCE_CLIENT_ID_VAL5: debug Validation client 5.
+ * @HW_FENCE_CLIENT_ID_VAL6: debug Validation client 6.
  * @HW_FENCE_CLIENT_MAX: Max number of clients, any client must be added
  *                       before this enum.
  */
@@ -139,6 +155,13 @@ enum hw_fence_client_id {
 	HW_FENCE_CLIENT_ID_CTL3,
 	HW_FENCE_CLIENT_ID_CTL4,
 	HW_FENCE_CLIENT_ID_CTL5,
+	HW_FENCE_CLIENT_ID_VAL0,
+	HW_FENCE_CLIENT_ID_VAL1,
+	HW_FENCE_CLIENT_ID_VAL2,
+	HW_FENCE_CLIENT_ID_VAL3,
+	HW_FENCE_CLIENT_ID_VAL4,
+	HW_FENCE_CLIENT_ID_VAL5,
+	HW_FENCE_CLIENT_ID_VAL6,
 	HW_FENCE_CLIENT_MAX
 };
 

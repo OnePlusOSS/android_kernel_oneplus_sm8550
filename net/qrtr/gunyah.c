@@ -62,6 +62,7 @@ struct gunyah_pipe {
  * @label: label for gunyah resources
  * @tx_dbl: doorbell for tx notifications.
  * @rx_dbl: doorbell for rx notifications.
+ * @dbl_lock: lock to prevent read races.
  * @tx_pipe: TX gunyah specific info.
  * @rx_pipe: RX gunyah specific info.
  */
@@ -82,6 +83,8 @@ struct qrtr_gunyah_dev {
 	void *tx_dbl;
 	void *rx_dbl;
 	struct work_struct work;
+	/* lock to protect dbl_running */
+	spinlock_t dbl_lock;
 
 	struct gunyah_pipe tx_pipe;
 	struct gunyah_pipe rx_pipe;
@@ -217,6 +220,60 @@ static void gunyah_tx_write(struct gunyah_pipe *pipe, const void *data,
 	*pipe->head = cpu_to_le32(head);
 }
 
+static size_t gunyah_sg_copy_toio(struct scatterlist *sg, unsigned int nents,
+				  void *buf, size_t buflen, off_t skip)
+{
+	unsigned int sg_flags = SG_MITER_ATOMIC | SG_MITER_FROM_SG;
+	struct sg_mapping_iter miter;
+	unsigned int offset = 0;
+
+	sg_miter_start(&miter, sg, nents, sg_flags);
+
+	if (!sg_miter_skip(&miter, skip))
+		return 0;
+
+	while ((offset < buflen) && sg_miter_next(&miter)) {
+		unsigned int len;
+
+		len = min(miter.length, buflen - offset);
+		memcpy_toio(buf + offset, miter.addr, len);
+		offset += len;
+	}
+
+	sg_miter_stop(&miter);
+
+	return offset;
+}
+
+static void gunyah_sg_write(struct gunyah_pipe *pipe, struct scatterlist *sg,
+			    int offset, size_t count)
+{
+	size_t len;
+	u32 head;
+	int rc = 0;
+
+	head = le32_to_cpu(*pipe->head);
+
+	len = min_t(size_t, count, pipe->length - head);
+	if (len) {
+		rc = gunyah_sg_copy_toio(sg, sg_nents(sg), pipe->fifo + head,
+					 len, offset);
+		offset += rc;
+	}
+
+	if (len != count)
+		rc = gunyah_sg_copy_toio(sg, sg_nents(sg), pipe->fifo,
+					 count - len, offset);
+
+	head += count;
+	if (head >= pipe->length)
+		head -= pipe->length;
+
+	smp_wmb();
+
+	*pipe->head = cpu_to_le32(head);
+}
+
 static void gunyah_set_tx_notify(struct qrtr_gunyah_dev *qdev)
 {
 	*qdev->tx_pipe.read_notify = cpu_to_le32(1);
@@ -247,16 +304,9 @@ static int qrtr_gunyah_send(struct qrtr_endpoint *ep, struct sk_buff *skb)
 	int chunk_size;
 	int left_size;
 	int offset;
-
 	int rc;
 
 	qdev = container_of(ep, struct qrtr_gunyah_dev, ep);
-
-	rc = skb_linearize(skb);
-	if (rc) {
-		kfree_skb(skb);
-		return rc;
-	}
 
 	left_size = skb->len;
 	offset = 0;
@@ -271,7 +321,22 @@ static int qrtr_gunyah_send(struct qrtr_endpoint *ep, struct sk_buff *skb)
 		else
 			chunk_size = left_size;
 
-		gunyah_tx_write(&qdev->tx_pipe, skb->data + offset, chunk_size);
+		if (skb_is_nonlinear(skb)) {
+			struct scatterlist sg[MAX_SKB_FRAGS + 1];
+
+			sg_init_table(sg, skb_shinfo(skb)->nr_frags + 1);
+			rc = skb_to_sgvec(skb, sg, 0, skb->len);
+			if (rc < 0) {
+				pr_err("failed skb_to_sgvec rc:%d\n", rc);
+				break;
+			}
+			gunyah_sg_write(&qdev->tx_pipe, sg, offset,
+					chunk_size);
+		} else {
+			gunyah_tx_write(&qdev->tx_pipe, skb->data + offset,
+					chunk_size);
+		}
+
 		offset += chunk_size;
 		left_size -= chunk_size;
 
@@ -295,7 +360,11 @@ static void qrtr_gunyah_read_new(struct qrtr_gunyah_dev *qdev)
 	gunyah_rx_peak(&qdev->rx_pipe, &hdr, 0, hdr_len);
 	pkt_len = qrtr_peek_pkt_size((void *)&hdr);
 	if ((int)pkt_len < 0 || pkt_len > MAX_PKT_SZ) {
-		dev_err(qdev->dev, "invalid pkt_len %zu\n", pkt_len);
+		/* Corrupted packet, reset the pipe and discard existing data */
+		rx_avail = gunyah_rx_avail(&qdev->rx_pipe);
+		dev_err(qdev->dev, "invalid pkt_len:%zu dropping:%zu bytes\n",
+			pkt_len, rx_avail);
+		gunyah_rx_advance(&qdev->rx_pipe, rx_avail);
 		return;
 	}
 
@@ -342,6 +411,9 @@ static void qrtr_gunyah_read_frag(struct qrtr_gunyah_dev *qdev)
 
 static void qrtr_gunyah_read(struct qrtr_gunyah_dev *qdev)
 {
+	unsigned long flags;
+
+	spin_lock_irqsave(&qdev->dbl_lock, flags);
 	wake_up_all(&qdev->tx_avail_notify);
 
 	while (gunyah_rx_avail(&qdev->rx_pipe)) {
@@ -353,6 +425,7 @@ static void qrtr_gunyah_read(struct qrtr_gunyah_dev *qdev)
 		if (gunyah_get_read_notify(qdev))
 			qrtr_gunyah_kick(qdev);
 	}
+	spin_unlock_irqrestore(&qdev->dbl_lock, flags);
 }
 
 static int qrtr_gunyah_share_mem(struct qrtr_gunyah_dev *qdev, gh_vmid_t self,
@@ -631,6 +704,8 @@ static int qrtr_gunyah_probe(struct platform_device *pdev)
 	qdev->ring.buf = devm_kzalloc(&pdev->dev, MAX_PKT_SZ, GFP_KERNEL);
 	if (!qdev->ring.buf)
 		return -ENOMEM;
+
+	spin_lock_init(&qdev->dbl_lock);
 
 	ret = of_property_read_u32(node, "gunyah-label", &qdev->label);
 	if (ret) {

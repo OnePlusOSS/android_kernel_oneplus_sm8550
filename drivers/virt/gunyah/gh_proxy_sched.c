@@ -28,6 +28,7 @@
 #include <uapi/linux/sched/types.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/pm_wakeup.h>
 #include <linux/of.h>
 #include <linux/mutex.h>
 #include <linux/interrupt.h>
@@ -65,10 +66,13 @@ struct gh_proxy_vcpu {
 	gh_capid_t cap_id;
 	gh_label_t idx;
 	bool abort_sleep;
+	bool wdog_frozen;
 	struct task_struct *task;
 	int virq;
 	char irq_name[32];
+	char ws_name[32];
 	wait_queue_head_t wait_queue;
+	struct wakeup_source *ws;
 };
 
 struct gh_proxy_vm {
@@ -78,6 +82,7 @@ struct gh_proxy_vm {
 	bool is_vcpu_info_populated;
 	bool is_active;
 
+	gh_capid_t wdog_cap_id;
 	gh_capid_t vpmg_cap_id;
 	int susp_res_irq;
 	bool is_vpm_group_info_populated;
@@ -118,16 +123,6 @@ static void gh_init_wait_queues(struct gh_proxy_vm *vm)
 		init_waitqueue_head(&vm->vcpu[j].wait_queue);
 }
 
-static inline bool is_vm_supports_proxy(gh_vmid_t gh_vmid)
-{
-	gh_vmid_t vmid;
-
-	if ((!gh_rm_get_vmid(GH_TRUSTED_VM, &vmid) && vmid == gh_vmid) ||
-			(!gh_rm_get_vmid(GH_OEM_VM, &vmid) && vmid == gh_vmid))
-		return true;
-
-	return false;
-}
 
 static inline struct gh_proxy_vm *gh_get_vm(gh_vmid_t vmid)
 {
@@ -141,6 +136,24 @@ static inline struct gh_proxy_vm *gh_get_vm(gh_vmid_t vmid)
 	}
 
 	return vm;
+}
+
+static inline bool is_vm_supports_proxy(gh_vmid_t gh_vmid)
+{
+	struct gh_proxy_vm *vm;
+	bool ret = false;
+
+	/* Only when the vmid corresponding vm's vcpu populated,
+	 * this vm's gh_proxy_vm struct will be initialised with
+	 * vcpu_count > 0.
+	 */
+	mutex_lock(&gh_vm_mutex);
+	vm = gh_get_vm(gh_vmid);
+	if (vm && vm->id != GH_VMID_INVAL && vm->vcpu_count > 0)
+		ret = true;
+
+	mutex_unlock(&gh_vm_mutex);
+	return ret;
 }
 
 static inline struct gh_proxy_vcpu *gh_get_vcpu(struct gh_proxy_vm *vm, gh_capid_t cap_id)
@@ -175,8 +188,12 @@ static inline void gh_reset_vm(struct gh_proxy_vm *vm)
 		vm->vcpu[j].idx = U32_MAX;
 		vm->vcpu[j].vm = NULL;
 		vm->vcpu[j].abort_sleep = false;
+		vm->vcpu[j].wdog_frozen = false;
+		vm->vcpu[j].ws = NULL;
 		strscpy(vm->vcpu[vm->vcpu_count].irq_name, "",
 				sizeof(vm->vcpu[vm->vcpu_count].irq_name));
+		strscpy(vm->vcpu[vm->vcpu_count].ws_name, "",
+				sizeof(vm->vcpu[vm->vcpu_count].ws_name));
 	}
 }
 
@@ -208,12 +225,44 @@ unlock:
 	return IRQ_HANDLED;
 }
 
-static inline void gh_get_irq_name(int vmid, int vcpu_num, char *irq_name)
+static inline void gh_get_vcpu_prop_name(int vmid, int vcpu_num, char *name)
 {
 	char extrastr[12];
 
 	scnprintf(extrastr, 12, "_%d_%d", vmid, vcpu_num);
-	strlcat(irq_name, extrastr, 32);
+	strlcat(name, extrastr, 32);
+}
+
+static int gh_wdog_manage(gh_vmid_t vmid, gh_capid_t cap_id, bool populate)
+{
+	struct gh_proxy_vm *vm;
+	int ret = 0;
+
+	if (!init_done) {
+		pr_err("Driver probe failed\n");
+		return -ENXIO;
+	}
+
+	if (!is_vm_supports_proxy(vmid)) {
+		pr_info("Skip populating VCPU affinity info for VM=%d\n", vmid);
+		return -EINVAL;
+	}
+
+	mutex_lock(&gh_vm_mutex);
+	vm = gh_get_vm(vmid);
+	if (!vm) {
+		ret = -ENODEV;
+		goto unlock;
+	}
+
+	if (populate)
+		vm->wdog_cap_id = cap_id;
+	else
+		vm->wdog_cap_id = GH_CAPID_INVAL;
+
+unlock:
+	mutex_unlock(&gh_vm_mutex);
+	return ret;
 }
 
 /*
@@ -226,6 +275,7 @@ static int gh_populate_vm_vcpu_info(gh_vmid_t vmid, gh_label_t cpu_idx,
 	struct gh_proxy_vm *vm;
 	int ret = 0;
 	char *vcpu_irq_name;
+	gh_vmid_t temp_vmid;
 
 	if (!init_done) {
 		pr_err("Driver probe failed\n");
@@ -233,7 +283,8 @@ static int gh_populate_vm_vcpu_info(gh_vmid_t vmid, gh_label_t cpu_idx,
 		goto out;
 	}
 
-	if (!is_vm_supports_proxy(vmid)) {
+	if ((!gh_rm_get_vmid(GH_TRUSTED_VM, &temp_vmid) && temp_vmid != vmid) &&
+	    (!gh_rm_get_vmid(GH_OEM_VM, &temp_vmid) && temp_vmid != vmid)) {
 		pr_info("Skip populating VCPU affinity info for VM=%d\n", vmid);
 		goto out;
 	}
@@ -259,16 +310,26 @@ static int gh_populate_vm_vcpu_info(gh_vmid_t vmid, gh_label_t cpu_idx,
 		}
 
 		strscpy(vm->vcpu[vm->vcpu_count].irq_name, "gh_vcpu_irq",
-					sizeof(vm->vcpu[vm->vcpu_count].irq_name));
-		gh_get_irq_name(vmid, vm->vcpu_count, vm->vcpu[vm->vcpu_count].irq_name);
+				sizeof(vm->vcpu[vm->vcpu_count].irq_name));
+		gh_get_vcpu_prop_name(vmid, vm->vcpu_count,
+				vm->vcpu[vm->vcpu_count].irq_name);
 		ret = request_irq(virq_num, gh_vcpu_irq_handler, 0,
-						vm->vcpu[vm->vcpu_count].irq_name,
-						&vm->vcpu[vm->vcpu_count]);
+				  vm->vcpu[vm->vcpu_count].irq_name,
+				  &vm->vcpu[vm->vcpu_count]);
 		if (ret < 0) {
 			pr_err("%s: IRQ registration failed ret=%d\n", __func__, ret);
-			strscpy(vm->vcpu[vm->vcpu_count].irq_name, "",
-					sizeof(vm->vcpu[vm->vcpu_count].irq_name));
-			goto unlock;
+			goto err_irq;
+		}
+
+		strscpy(vm->vcpu[vm->vcpu_count].ws_name, "gh_vcpu_ws",
+				sizeof(vm->vcpu[vm->vcpu_count].ws_name));
+		gh_get_vcpu_prop_name(vmid, vm->vcpu_count,
+				vm->vcpu[vm->vcpu_count].ws_name);
+		vm->vcpu[vm->vcpu_count].ws = wakeup_source_register(NULL,
+				vm->vcpu[vm->vcpu_count].ws_name);
+		if (!vm->vcpu[vm->vcpu_count].ws) {
+			pr_err("%s: Wakeup source creation failed\n", __func__);
+			goto err_ws;
 		}
 
 		vm->id = vmid;
@@ -283,7 +344,15 @@ static int gh_populate_vm_vcpu_info(gh_vmid_t vmid, gh_label_t cpu_idx,
 		pr_info("vmid=%d cpu_index:%u vcpu_cap_id:%llu virq_num=%d irq_name=%s nr_vcpus:%d\n",
 				vmid, cpu_idx, cap_id, virq_num, vcpu_irq_name, nr_vcpus);
 	}
+	goto unlock;
 
+err_ws:
+	strscpy(vm->vcpu[vm->vcpu_count].ws_name, "",
+			sizeof(vm->vcpu[vm->vcpu_count].ws_name));
+	free_irq(virq_num, &vm->vcpu[vm->vcpu_count]);
+err_irq:
+	strscpy(vm->vcpu[vm->vcpu_count].irq_name, "",
+			sizeof(vm->vcpu[vm->vcpu_count].irq_name));
 unlock:
 	mutex_unlock(&gh_vm_mutex);
 out:
@@ -314,6 +383,7 @@ static int gh_unpopulate_vm_vcpu_info(gh_vmid_t vmid, gh_label_t cpu_idx,
 			*irq = vcpu->virq;
 			free_irq(vcpu->virq, vcpu);
 			vcpu->virq = U32_MAX;
+			wakeup_source_unregister(vcpu->ws);
 
 			if (nr_vcpus)
 				nr_vcpus--;
@@ -533,11 +603,25 @@ int gh_vcpu_run(gh_vmid_t vmid, unsigned int vcpu_id, uint64_t resume_data_0,
 		 * We're about to run the vcpu, so we can reset the abort-sleep flag.
 		 */
 		vcpu->abort_sleep = false;
+		__pm_stay_awake(vcpu->ws);
 
 		start_ts = ktime_get();
 		/* Call into Gunyah to run vcpu. */
+		preempt_disable();
+		if (vcpu->wdog_frozen) {
+			gh_hcall_wdog_manage(vm->wdog_cap_id, WATCHDOG_MANAGE_OP_UNFREEZE);
+			vcpu->wdog_frozen = false;
+		}
 		ret = gh_hcall_vcpu_run(vcpu->cap_id, resume_data_0,
 					resume_data_1, resume_data_2, resp);
+		if (ret == GH_ERROR_OK && resp->vcpu_state == GH_VCPU_STATE_READY) {
+			if (need_resched()) {
+				gh_hcall_wdog_manage(vm->wdog_cap_id,
+						WATCHDOG_MANAGE_OP_FREEZE);
+				vcpu->wdog_frozen = true;
+			}
+		}
+		preempt_enable();
 		yield_ts = ktime_get() - start_ts;
 		trace_gh_hcall_vcpu_run(ret, vcpu->vm->id, vcpu_id, yield_ts,
 					resp->vcpu_state, resp->vcpu_suspend_state);
@@ -553,6 +637,7 @@ int gh_vcpu_run(gh_vmid_t vmid, unsigned int vcpu_id, uint64_t resume_data_0,
 			/* VCPU in WFI or suspended/powered down. */
 			case GH_VCPU_STATE_EXPECTS_WAKEUP:
 			case GH_VCPU_STATE_POWERED_OFF:
+				__pm_relax(vcpu->ws);
 				gh_vcpu_sleep(vcpu);
 				break;
 
@@ -574,12 +659,17 @@ int gh_vcpu_run(gh_vmid_t vmid, unsigned int vcpu_id, uint64_t resume_data_0,
 		}
 
 		if (signal_pending(current)) {
-			ret = -EINTR;
+			if (!vcpu->wdog_frozen) {
+				gh_hcall_wdog_manage(vm->wdog_cap_id,
+						WATCHDOG_MANAGE_OP_FREEZE);
+				vcpu->wdog_frozen = true;
+			}
+			ret = -ERESTARTSYS;
 			break;
 		}
 	} while ((ret == GH_ERROR_OK || ret == GH_ERROR_RETRY) && vm->is_active);
 
-	if (ret != -EINTR)
+	if (ret != -ERESTARTSYS)
 		ret = gh_remap_error(ret);
 
 	return ret;
@@ -588,6 +678,12 @@ int gh_vcpu_run(gh_vmid_t vmid, unsigned int vcpu_id, uint64_t resume_data_0,
 static int gh_proxy_sched_reg_rm_cbs(void)
 {
 	int ret = -EINVAL;
+
+	ret = gh_rm_set_wdog_manage_cb(&gh_wdog_manage);
+	if (ret) {
+		pr_err("fail to set the WDOG resource callback\n");
+		return ret;
+	}
 
 	ret = gh_rm_set_vcpu_affinity_cb(&gh_populate_vm_vcpu_info);
 	if (ret) {
