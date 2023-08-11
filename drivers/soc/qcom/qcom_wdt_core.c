@@ -601,6 +601,12 @@ static void qcom_wdt_keep_alive_response(void *info)
 static void qcom_wdt_ping_other_cpus(struct msm_watchdog_data *wdog_dd)
 {
 	int cpu;
+	
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_QCOM_WATCHDOG)
+	/* donelle@BSP, print more info on pet watchdog */
+	cpumask_t mask;
+	oplus_get_cpu_ping_mask(&mask, wdog_dd->cpu_idle_pc_state);
+#endif
 
 #if IS_ENABLED(CONFIG_OPLUS_FEATURE_QCOM_WATCHDOG)
 	/* donelle@BSP, print more info on pet watchdog */

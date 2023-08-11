@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Copyright (C), 2008-2021, OPPO Mobile Comm Corp., Ltd.
- *             https://www.oppo.com/
+ * Copyright (C), 2008-2021, OPLUS Mobile Comm Corp., Ltd.
+ *             https://www.oplus.com/
  */
 #include <linux/sysfs.h>
 #include <linux/kobject.h>
