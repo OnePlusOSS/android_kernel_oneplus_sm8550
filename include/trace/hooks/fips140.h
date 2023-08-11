@@ -7,6 +7,10 @@
 #define _TRACE_HOOK_FIPS140_H
 #include <trace/hooks/vendor_hooks.h>
 
+#ifdef __GENKSYMS__
+#include <crypto/aes.h>
+#endif
+
 struct crypto_aes_ctx;
 
 /*

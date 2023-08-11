@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2020-2021, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Qualcomm Technologies, Inc. SPSS Peripheral Image Loader
  *
  */
@@ -35,6 +36,11 @@
 
 #define to_glink_subdev(d) container_of(d, struct qcom_rproc_glink, subdev)
 
+#define SP_SCSR_MB0_SP2CL_GP0_ADDR 0x1886020
+#define SP_SCSR_MB1_SP2CL_GP0_ADDR 0x1888020
+#define SP_SCSR_MB3_SP2CL_GP0_ADDR 0x188C020
+
+#define NUM_OF_DEBUG_REGISTERS_READ 0x3
 struct spss_data {
 	const char *firmware_name;
 	int pas_id;
@@ -71,6 +77,26 @@ struct qcom_spss {
 	void __iomem *rmb_gpm;
 	u32 bits_arr[2];
 };
+
+static void read_sp2cl_debug_registers(struct qcom_spss *spss);
+
+static void read_sp2cl_debug_registers(struct qcom_spss *spss)
+{
+	uint32_t iter;
+	void __iomem *addr = NULL;
+	uint32_t debug_register_addr[NUM_OF_DEBUG_REGISTERS_READ] = {SP_SCSR_MB0_SP2CL_GP0_ADDR,
+	  SP_SCSR_MB1_SP2CL_GP0_ADDR, SP_SCSR_MB3_SP2CL_GP0_ADDR};
+	for (iter = 0; iter < NUM_OF_DEBUG_REGISTERS_READ; iter++) {
+		addr = ioremap(debug_register_addr[iter], sizeof(uint32_t)*2);
+		if (!addr) {
+			dev_err(spss->dev, "Iteration: [0x%x], addr: [0x%x]\n", iter, addr);
+			continue;
+		}
+		dev_info(spss->dev, "Iteration: [0x%x], Debug Data1: [0x%x], Debug Data2: [0x%x]\n",
+		iter, readl_relaxed(addr), readl_relaxed(((char *) addr) + sizeof(uint32_t)));
+		iounmap(addr);
+	}
+}
 
 static int glink_spss_subdev_start(struct rproc_subdev *subdev)
 {
@@ -192,6 +218,8 @@ static void clear_sw_init_done_error(struct qcom_spss *spss, int err)
 static void clear_wdog(struct qcom_spss *spss)
 {
 	dev_err(spss->dev, "wdog bite received from %s!\n", spss->rproc->name);
+	dev_err(spss->dev, "rproc recovery state: %s\n", spss->rproc->recovery_disabled ?
+		"disabled and lead to device crash" : "enabled and kick reovery process");
 	if (spss->rproc->recovery_disabled) {
 		spss->rproc->state = RPROC_CRASHED;
 		panic("Panicking, remoterpoc %s crashed\n", spss->rproc->name);
@@ -309,6 +337,7 @@ static int spss_attach(struct rproc *rproc)
 	unmask_scsr_irqs(spss);
 
 	ret = wait_for_completion_timeout(&spss->start_done, msecs_to_jiffies(SPSS_TIMEOUT));
+	read_sp2cl_debug_registers(spss);
 	if (rproc->recovery_disabled && !ret) {
 		dev_err(spss->dev, "%d ms timeout poked\n", SPSS_TIMEOUT);
 		panic("Panicking, %s attach timed out\n", rproc->name);
@@ -353,8 +382,9 @@ static int spss_start(struct rproc *rproc)
 		panic("Panicking, auth and reset failed for remoteproc %s\n", rproc->name);
 
 	unmask_scsr_irqs(spss);
-
+	dev_err(spss->dev, "trying to read spss registers\n");
 	ret = wait_for_completion_timeout(&spss->start_done, msecs_to_jiffies(SPSS_TIMEOUT));
+	read_sp2cl_debug_registers(spss);
 	if (rproc->recovery_disabled && !ret)
 		panic("Panicking, %s start timed out\n", rproc->name);
 	else if (!ret)

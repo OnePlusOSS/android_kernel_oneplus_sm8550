@@ -24,6 +24,10 @@
 
 #include "internal.h"
 
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+#include <linux/proc_fs.h>
+#endif
+
 struct debug_regulator {
 	struct list_head	list;
 	struct regulator	*reg;
@@ -33,6 +37,10 @@ struct debug_regulator {
 
 static DEFINE_MUTEX(debug_reg_list_lock);
 static LIST_HEAD(debug_reg_list);
+
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+static bool debug_suspend_flag;
+#endif
 
 static const char *rdev_name(struct regulator_dev *rdev)
 {
@@ -696,6 +704,61 @@ static int reg_debug_suspend_enable_set(void *data, u64 val)
 DEFINE_DEBUGFS_ATTRIBUTE(reg_debug_suspend_enable_fops,
 	reg_debug_suspend_enable_get, reg_debug_suspend_enable_set, "%llu\n");
 
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+static ssize_t debug_suspend_write(struct file *filp,
+		const char __user *buff, size_t len, loff_t *data)
+{
+	char buf[10] = {0};
+	unsigned int val = 0;
+	int ret = 0;
+
+	if (len > sizeof(buf))
+		return -EFAULT;
+
+	if (copy_from_user((char *)buf, buff, len))
+		return -EFAULT;
+
+	if (kstrtouint(buf, sizeof(buf), &val))
+		return -EINVAL;
+
+	debug_suspend_flag = !!val;
+	if (debug_suspend_flag)
+		ret = register_trace_suspend_resume(
+			regulator_debug_suspend_trace_probe, NULL);
+	else
+		ret = unregister_trace_suspend_resume(
+			regulator_debug_suspend_trace_probe, NULL);
+	if (ret)
+		pr_err("%s: Failed to %sregister suspend trace callback, ret=%d\n",
+			__func__, debug_suspend_flag ? "" : "un", ret);
+
+	return len;
+}
+
+static int debug_suspend_show(struct seq_file *seq_filp, void *v)
+{
+	seq_printf(seq_filp, "%d\n", debug_suspend_flag);
+	return 0;
+}
+static int debug_suspend_open(struct inode *inode, struct file *file)
+{
+	int ret;
+
+	ret = single_open(file, debug_suspend_show, NULL);
+
+	return ret;
+}
+static const struct proc_ops debug_suspend_fops = {
+	.proc_open		= debug_suspend_open,
+	.proc_write		= debug_suspend_write,
+	.proc_read		= seq_read,
+};
+#endif
+
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+struct proc_dir_entry *regulator_proc;
+#endif
+
 static int __init regulator_debug_init(void)
 {
 	static struct dentry *dir;
@@ -718,6 +781,11 @@ static int __init regulator_debug_init(void)
 		pr_err("%s: unable to create regulator debug_suspend debugfs directory, ret=%d\n",
 			__func__, ret);
 	}
+
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	regulator_proc = proc_mkdir("regulator", NULL);
+	proc_create("debug_suspend", 0664, regulator_proc, &debug_suspend_fops);
+#endif
 
 	return 0;
 }

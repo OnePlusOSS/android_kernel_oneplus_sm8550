@@ -273,10 +273,13 @@ int qmp_send(struct qmp *qmp, const void *data, size_t len)
 		/* Clear message from buffer */
 		AOSS_INFO("timed out clearing msg: %.*s\n", len, (char *)data);
 		writel(0, qmp->msgram + qmp->offset);
+	} else if (time_left < 0) {
+		dev_err(qmp->dev, "wait error %d\n", time_left);
+		ret = time_left;
 	} else {
+		AOSS_INFO("ack: %.*s\n", len, (char *)data);
 		ret = 0;
 	}
-	AOSS_INFO("ack: %.*s\n", len, (char *)data);
 
 	mutex_unlock(&qmp->tx_lock);
 
@@ -515,8 +518,10 @@ static int qmp_cooling_devices_register(struct qmp *qmp)
 			continue;
 		ret = qmp_cooling_device_add(qmp, &qmp->cooling_devs[count++],
 					     child);
-		if (ret)
+		if (ret) {
+			of_node_put(child);
 			goto unroll;
+		}
 	}
 
 	if (!count)
@@ -671,6 +676,7 @@ static int qmp_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "failed to register aoss cooling devices\n");
 
 	platform_set_drvdata(pdev, qmp);
+	dev_set_drvdata(&pdev->dev, qmp);
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 	qmp->debugfs_file = debugfs_create_file("aoss_send_message", 0220, NULL,
@@ -707,6 +713,28 @@ static int qmp_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static int aoss_qmp_mbox_freeze(struct device *dev)
+{
+	return 0;
+}
+
+static int aoss_qmp_mbox_restore(struct device *dev)
+{
+	struct qmp *qmp = dev_get_drvdata(dev);
+	int ret;
+
+	ret = qmp_open(qmp);
+	if (ret < 0)
+		dev_err(dev, "QMP restore failed, ret = %d\n", ret);
+
+	return 0;
+}
+
+static const struct dev_pm_ops aoss_qmp_mbox_pm_ops = {
+	.freeze_late = aoss_qmp_mbox_freeze,
+	.restore_early = aoss_qmp_mbox_restore,
+};
+
 static const struct of_device_id qmp_dt_match[] = {
 	{ .compatible = "qcom,sc7180-aoss-qmp", },
 	{ .compatible = "qcom,sc7280-aoss-qmp", },
@@ -718,6 +746,8 @@ static const struct of_device_id qmp_dt_match[] = {
 	{ .compatible = "qcom,aoss-qmp", },
 	{ .compatible = "qcom,waipio-aoss-qmp", },
 	{ .compatible = "qcom,cinder-aoss-qmp", },
+	{ .compatible = "qcom,sdxpinn-aoss-qmp", },
+	{ .compatible = "qcom,sdxbaagha-aoss-qmp", },
 	{}
 };
 MODULE_DEVICE_TABLE(of, qmp_dt_match);
@@ -727,6 +757,7 @@ static struct platform_driver qmp_driver = {
 		.name		= "qcom_aoss_qmp",
 		.of_match_table	= qmp_dt_match,
 		.suppress_bind_attrs = true,
+		.pm = &aoss_qmp_mbox_pm_ops,
 	},
 	.probe = qmp_probe,
 	.remove	= qmp_remove,

@@ -21,6 +21,10 @@
 
 #define BOOT_LOG_SIZE    SZ_512K
 #define LOG_NEWLINE          2
+/* start: add cpu core id in kernel log */
+#define CPU_INDEX            100000
+#define CPU_CONTEXT_MAGIC    0x80000000
+/* end: add cpu core id in kernel log */
 
 static char *boot_log_buf;
 static unsigned int boot_log_buf_size;
@@ -214,6 +218,13 @@ static void copy_boot_log(void *unused, struct printk_ringbuffer *prb,
 	unsigned long begin, end;
 	enum desc_state state;
 	size_t rem_buf_sz;
+
+        /* start: add cpu core id in kernel log */
+	if (r->info->caller_id  & CPU_CONTEXT_MAGIC) { // not in_task status
+	} else {
+        r->info->caller_id = r->info->caller_id + (raw_smp_processor_id() * CPU_INDEX);
+	}
+	/* end: add cpu core id in kernel log */
 
 	tailid = descring.tail_id;
 	headid = descring.head_id;

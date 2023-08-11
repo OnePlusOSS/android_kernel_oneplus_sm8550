@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -23,6 +24,7 @@
 #include <linux/mailbox_client.h>
 #include <linux/mailbox_controller.h>
 #include <linux/mailbox/qmp.h>
+#include <linux/interconnect.h>
 
 #include "../../regulator/internal.h"
 #include "gdsc-debug.h"
@@ -77,6 +79,7 @@ struct gdsc {
 	struct mbox_client	mbox_client;
 	struct mbox_chan	*mbox;
 	struct reset_control	**reset_clocks;
+	struct icc_path		**paths;
 	bool			toggle_logic;
 	bool			retain_ff_enable;
 	bool			resets_asserted;
@@ -91,6 +94,7 @@ struct gdsc {
 	int			reset_count;
 	int			root_clk_idx;
 	int			sw_reset_count;
+	int			path_count;
 	u32			gds_timeout;
 	bool			skip_disable_before_enable;
 	bool			skip_disable;
@@ -117,7 +121,7 @@ static int poll_gdsc_status(struct gdsc *sc, enum gdscr_status status)
 	int count = sc->gds_timeout;
 	u32 val, reg_offset;
 
-	if (sc->hw_ctrl)
+	if (sc->hw_ctrl && !sc->cfg_gdscr)
 		regmap = sc->hw_ctrl;
 	else
 		regmap = sc->regmap;
@@ -266,6 +270,14 @@ static int gdsc_enable(struct regulator_dev *rdev)
 	}
 
 	if (sc->toggle_logic) {
+		for (i = 0; i < sc->path_count; i++) {
+			ret = icc_set_bw(sc->paths[i], 1, 1);
+			if (ret) {
+				dev_err(&rdev->dev, "Failed to vote BW for %d, ret=%d\n", i, ret);
+				return ret;
+			}
+		}
+
 		if (sc->sw_reset_count) {
 			for (i = 0; i < sc->sw_reset_count; i++)
 				regmap_set_bits(sc->sw_resets[i], REG_OFFSET,
@@ -409,22 +421,31 @@ static int gdsc_enable(struct regulator_dev *rdev)
 static int gdsc_disable(struct regulator_dev *rdev)
 {
 	struct gdsc *sc = rdev_get_drvdata(rdev);
+	struct regulator_dev *parent_rdev;
 	uint32_t regval;
-	int i, ret = 0, parent_enabled;
+	int i, ret = 0;
+	bool lock = false;
 
 	if (rdev->supply) {
-		parent_enabled = regulator_is_enabled(rdev->supply);
-		if (parent_enabled < 0) {
-			ret = parent_enabled;
-			dev_err(&rdev->dev, "%s unable to check parent enable state, ret=%d\n",
-				sc->rdesc.name, ret);
-			return ret;
-		}
+		parent_rdev = rdev->supply->rdev;
 
-		if (!parent_enabled) {
+		/*
+		 * At this point, it can be assumed that parent supply's mutex is always
+		 * locked by regulator framework before calling this callback but there
+		 * are code paths where it isn't locked (e.g regulator_late_cleanup()).
+		 *
+		 * If parent supply is not locked, lock the parent supply mutex before
+		 * checking it's enable count, so it won't get disabled while in the
+		 * middle of GDSC operations
+		 */
+		if (ww_mutex_trylock(&parent_rdev->mutex))
+			lock = true;
+
+		if (!parent_rdev->use_count) {
 			dev_err(&rdev->dev, "%s cannot disable GDSC while parent is disabled\n",
 				sc->rdesc.name);
-			return -EIO;
+			ret = -EIO;
+			goto done;
 		}
 	}
 
@@ -479,6 +500,13 @@ static int gdsc_disable(struct regulator_dev *rdev)
 			regmap_write(sc->domain_addr, REG_OFFSET, regval);
 		}
 
+		for (i = 0; i < sc->path_count; i++) {
+			ret = icc_set_bw(sc->paths[i], 0, 0);
+			if (ret) {
+				dev_err(&rdev->dev, "Failed to unvote BW for %d: %d\n", i, ret);
+				return ret;
+			}
+		}
 	} else {
 		for (i = sc->reset_count - 1; i >= 0; i--)
 			reset_control_assert(sc->reset_clocks[i]);
@@ -495,6 +523,10 @@ static int gdsc_disable(struct regulator_dev *rdev)
 	}
 
 	sc->is_gdsc_enabled = false;
+
+done:
+	if (rdev->supply && lock)
+		ww_mutex_unlock(&parent_rdev->mutex);
 
 	return ret;
 }
@@ -530,6 +562,7 @@ static unsigned int gdsc_get_mode(struct regulator_dev *rdev)
 static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 {
 	struct gdsc *sc = rdev_get_drvdata(rdev);
+	struct regulator_dev *parent_rdev;
 	uint32_t regval;
 	int ret = 0;
 
@@ -550,27 +583,27 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 	}
 
 	if (rdev->supply) {
+		parent_rdev = rdev->supply->rdev;
 		/*
 		 * Ensure that the GDSC parent supply is enabled before
 		 * continuing.  This is needed to avoid an unclocked access
 		 * of the GDSC control register for GDSCs whose register access
 		 * is gated by the parent supply enable state in hardware.
 		 */
-		ret = regulator_is_enabled(rdev->supply);
-		if (ret < 0) {
-			dev_err(&rdev->dev, "%s unable to check parent enable state, ret=%d\n",
-				sc->rdesc.name, ret);
-			return ret;
-		} else if (WARN(!ret,
+		ww_mutex_lock(&parent_rdev->mutex, NULL);
+
+		if (!parent_rdev->use_count) {
+			dev_err(&rdev->dev,
 				"%s cannot change GDSC HW/SW control mode while parent is disabled\n",
-				sc->rdesc.name)) {
-			return -EIO;
+				sc->rdesc.name);
+			ret = -EIO;
+			goto done;
 		}
 	}
 
 	ret = regmap_read(sc->regmap, REG_OFFSET, &regval);
 	if (ret < 0)
-		return ret;
+		goto done;
 
 	switch (mode) {
 	case REGULATOR_MODE_FAST:
@@ -578,7 +611,7 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 		regval |= HW_CONTROL_MASK;
 		ret = regmap_write(sc->regmap, REG_OFFSET, regval);
 		if (ret < 0)
-			return ret;
+			goto done;
 		/*
 		 * There may be a race with internal HW trigger signal,
 		 * that will result in GDSC going through a power down and
@@ -597,7 +630,7 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 		regval &= ~HW_CONTROL_MASK;
 		ret = regmap_write(sc->regmap, REG_OFFSET, regval);
 		if (ret < 0)
-			return ret;
+			goto done;
 		/*
 		 * There may be a race with internal HW trigger signal,
 		 * that will result in GDSC going through a power down and
@@ -617,16 +650,21 @@ static int gdsc_set_mode(struct regulator_dev *rdev, unsigned int mode)
 			if (ret) {
 				dev_err(&rdev->dev, "%s enable timed out\n",
 					sc->rdesc.name);
-				return ret;
+				goto done;
 			}
 		}
 		sc->is_gdsc_hw_ctrl_mode = false;
 		break;
 	default:
-		return -EINVAL;
+		ret = -EINVAL;
+		break;
 	}
 
-	return 0;
+done:
+	if (rdev->supply)
+		ww_mutex_unlock(&parent_rdev->mutex);
+
+	return ret;
 }
 
 static const struct regulator_ops gdsc_ops = {
@@ -755,6 +793,16 @@ static int gdsc_parse_dt_data(struct gdsc *sc, struct device *dev,
 		return sc->clock_count;
 	}
 
+	sc->path_count = of_property_count_strings(dev->of_node,
+						   "interconnect-names");
+	if (sc->path_count == -EINVAL) {
+		sc->path_count = 0;
+	} else if (sc->path_count < 0) {
+		dev_err(dev, "Failed to get interconnect names, ret=%d\n",
+			sc->path_count);
+		return sc->path_count;
+	}
+
 	sc->root_en = of_property_read_bool(dev->of_node,
 						"qcom,enable-root-clk");
 	sc->force_root_en = of_property_read_bool(dev->of_node,
@@ -878,6 +926,26 @@ static int gdsc_get_resources(struct gdsc *sc, struct platform_device *pdev)
 
 		if (!strcmp(clock_name, "core_root_clk"))
 			sc->root_clk_idx = i;
+	}
+
+	sc->paths = devm_kcalloc(dev, sc->path_count, sizeof(*sc->paths), GFP_KERNEL);
+	if (sc->path_count && !sc->paths)
+		return -ENOMEM;
+
+	for (i = 0; i < sc->path_count; i++) {
+		const char *name;
+
+		of_property_read_string_index(dev->of_node, "interconnect-names", i,
+					      &name);
+
+		sc->paths[i] = of_icc_get(dev, name);
+		if (IS_ERR(sc->paths[i])) {
+			ret = PTR_ERR(sc->paths[i]);
+			if (ret != -EPROBE_DEFER)
+				dev_err(dev, "Failed to get path %s, ret=%d\n",
+					name, ret);
+			return ret;
+		}
 	}
 
 	if ((sc->root_en || sc->force_root_en) && (sc->root_clk_idx == -1)) {

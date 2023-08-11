@@ -1496,9 +1496,6 @@ int add_memory_subsection(int nid, u64 start, u64 size)
 	struct resource *res;
 	int ret;
 
-	if (size == memory_block_size_bytes())
-		return add_memory(nid, start, size, MHP_NONE);
-
 	if (!IS_ALIGNED(start, SUBSECTION_SIZE) ||
 	    !IS_ALIGNED(size, SUBSECTION_SIZE)) {
 		pr_err("%s: start 0x%llx size 0x%llx not aligned to subsection size\n",
@@ -1519,13 +1516,21 @@ int add_memory_subsection(int nid, u64 start, u64 size)
 
 	ret = arch_add_memory(nid, start, size, &params);
 	if (ret) {
-		if (IS_ENABLED(CONFIG_ARCH_KEEP_MEMBLOCK))
-			memblock_remove(start, size);
 		pr_err("%s failed to add subsection start 0x%llx size 0x%llx\n",
 			   __func__, start, size);
+		goto err_add_memory;
 	}
 	mem_hotplug_done();
 
+	return ret;
+
+err_add_memory:
+	if (IS_ENABLED(CONFIG_ARCH_KEEP_MEMBLOCK))
+		memblock_remove(start, size);
+
+	mem_hotplug_done();
+
+	release_memory_resource(res);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(add_memory_subsection);
@@ -2295,9 +2300,6 @@ EXPORT_SYMBOL_GPL(remove_memory);
 
 int remove_memory_subsection(u64 start, u64 size)
 {
-	if (size ==  memory_block_size_bytes())
-		return remove_memory(start, size);
-
 	if (!IS_ALIGNED(start, SUBSECTION_SIZE) ||
 	    !IS_ALIGNED(size, SUBSECTION_SIZE)) {
 		pr_err("%s: start 0x%llx size 0x%llx not aligned to subsection size\n",

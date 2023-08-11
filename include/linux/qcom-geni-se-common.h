@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _LINUX_QCOM_GENI_SE_COMMON
@@ -38,18 +39,31 @@ if (print) { \
 } \
 } while (0)
 
+#define DEFAULT_BUS_WIDTH	(4)
+
+/* In KHz */
+#define DEFAULT_SE_CLK	19200
+#define SPI_CORE2X_VOTE	100000
+#define I2C_CORE2X_VOTE	19200
+#define I3C_CORE2X_VOTE	19200
+#define UART_CORE2X_VOTE	100000
+#define UART_CONSOLE_CORE2X_VOTE	19200
+#define APPS_PROC_TO_QUP_VOTE	1190000
+/* SE_DMA_GENERAL_CFG */
 #define SE_DMA_DEBUG_REG0		(0xE40)
-#define SE_DMA_RX_LEN			(0xD3C)
-#define SE_DMA_RX_LEN_IN		(0xD54)
-#define SE_DMA_TX_LEN			(0xC3C)
-#define SE_DMA_TX_LEN_IN		(0xC54)
-#define SE_DMA_TX_IRQ_EN		(0xC48)
-#define SE_DMA_RX_IRQ_EN		(0xD48)
+
+#define SE_DMA_TX_PTR_L			(0xC30)
+#define SE_DMA_TX_PTR_H			(0xC34)
+#define SE_DMA_TX_LEN                   (0xC3C)
+#define SE_DMA_TX_IRQ_EN                (0xC48)
+#define SE_DMA_TX_LEN_IN                (0xC54)
 
 #define SE_DMA_RX_PTR_L			(0xD30)
 #define SE_DMA_RX_PTR_H			(0xD34)
 #define SE_DMA_RX_ATTR			(0xD38)
 #define SE_DMA_RX_LEN			(0xD3C)
+#define SE_DMA_RX_IRQ_EN                (0xD48)
+#define SE_DMA_RX_LEN_IN                (0xD54)
 
 #define SE_DMA_TX_IRQ_EN_SET	(0xC4C)
 #define SE_DMA_TX_IRQ_EN_CLR	(0xC50)
@@ -74,6 +88,16 @@ if (print) { \
 #define GENI_FW_S_REVISION_RO	(0x6C)
 #define FW_REV_VERSION_MSK		(GENMASK(7, 0))
 
+/* GENI_OUTPUT_CTRL fields */
+#define GENI_CFG_REG80		0x240
+#define GENI_IO_MUX_0_EN	BIT(0)
+#define GENI_IO_MUX_1_EN	BIT(1)
+
+/* GENI_CFG_REG80 fields */
+#define IO1_SEL_TX		BIT(2)
+#define IO2_DATA_IN_SEL_PAD2	GENMASK(11, 10)
+#define IO3_DATA_IN_SEL_PAD2	BIT(15)
+
 #define GSI_TX_PACK_EN          (BIT(0))
 #define GSI_RX_PACK_EN          (BIT(1))
 #define GSI_PRESERVE_PACK       (BIT(2))
@@ -83,6 +107,13 @@ if (print) { \
 #define HW_VER_MINOR_MASK GENMASK(27, 16)
 #define HW_VER_MINOR_SHFT 16
 #define HW_VER_STEP_MASK GENMASK(15, 0)
+
+#define OTHER_IO_OE		BIT(12)
+#define IO2_DATA_IN_SEL		BIT(11)
+#define RX_DATA_IN_SEL		BIT(8)
+#define IO_MACRO_IO3_SEL	(GENMASK(7, 6))
+#define IO_MACRO_IO2_SEL	BIT(5)
+#define IO_MACRO_IO0_SEL_BIT	BIT(0)
 
 static inline int geni_se_common_resources_init(struct geni_se *se, u32 geni_to_core,
 			 u32 cpu_to_geni, u32 geni_to_ddr)

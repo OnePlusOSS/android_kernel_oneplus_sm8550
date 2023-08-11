@@ -38,4 +38,16 @@ config SCHED_CONSERVATIVE_BOOST_LPM_BIAS
 	  modes on a cpu if conservative boost is active. The cpu
 	  will not enter low power mode for a hysteresis time period,
 	  which can be configured from userspace.
+
+config OPLUS_FEATURE_SUGOV_TL
+	bool "use target loads in walt governor"
+	depends on SCHED_WALT
+	help
+	  Add target_loads sysfs attr in cpufreq walt governor.
+
+config OPLUS_FEATURE_WINDOW_POLICY
+	bool
+	default y
+	help
+	 This feature will support different walt window history policy.
 endmenu

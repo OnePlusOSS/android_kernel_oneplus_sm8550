@@ -123,14 +123,18 @@ static struct sg_table *qcom_sg_map_dma_buf(struct dma_buf_attachment *attachmen
 	if (buffer->uncached || !mem_buf_vmperm_can_cmo(vmperm))
 		attrs |= DMA_ATTR_SKIP_CPU_SYNC;
 
-	if (attrs & DMA_ATTR_DELAYED_UNMAP)
+	if (attrs & DMA_ATTR_DELAYED_UNMAP) {
 		ret = msm_dma_map_sgtable(attachment->dev, table, direction,
 					  attachment->dmabuf, attrs);
-	else
+	} else if (!a->mapped) {
 		ret = dma_map_sgtable(attachment->dev, table, direction, attrs);
+	} else {
+		dev_err(attachment->dev, "Error: Dma-buf is already mapped!\n");
+		ret = -EBUSY;
+	}
 
 	if (ret) {
-		table = ERR_PTR(-ENOMEM);
+		table = ERR_PTR(ret);
 		goto err_map_sgtable;
 	}
 
@@ -513,6 +517,17 @@ static void qcom_sg_release(struct dma_buf *dmabuf)
 		return;
 
 	msm_dma_buf_freed(buffer);
+
+#ifdef CONFIG_QCOM_DMABUF_HEAPS_SYSTEM
+	if (is_system_heap_deferred_free(buffer->free)) {
+		if (atomic64_sub_return(buffer->len, &qcom_system_heap_total) < 0) {
+			pr_info("warn: %s, total memory underflow, 0x%lx!!, reset as 0\n",
+				__func__, atomic64_read(&qcom_system_heap_total));
+			atomic64_set(&qcom_system_heap_total, 0);
+		}
+	}
+#endif /* CONFIG_QCOM_DMABUF_HEAPS_SYSTEM */
+
 	buffer->free(buffer);
 }
 

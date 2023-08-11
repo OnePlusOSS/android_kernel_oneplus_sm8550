@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Copyright (C), 2008-2021, OPPO Mobile Comm Corp., Ltd.
- *             https://www.oppo.com/
+ * Copyright (C), 2008-2021, OPLUS Mobile Comm Corp., Ltd.
+ *             https://www.oplus.com/
  */
 #include <linux/sysfs.h>
 #include <linux/kobject.h>
@@ -204,9 +204,11 @@ void erofs_unregister_sysfs(struct super_block *sb)
 {
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
 
-	kobject_del(&sbi->s_kobj);
-	kobject_put(&sbi->s_kobj);
-	wait_for_completion(&sbi->s_kobj_unregister);
+	if (sbi->s_kobj.state_in_sysfs) {
+		kobject_del(&sbi->s_kobj);
+		kobject_put(&sbi->s_kobj);
+		wait_for_completion(&sbi->s_kobj_unregister);
+	}
 }
 
 int __init erofs_init_sysfs(void)

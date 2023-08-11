@@ -4,6 +4,7 @@ iommu-logger.ko
 llcc-qcom.ko
 mem_buf.ko
 mem_buf_dev.ko
+mem_buf_msgq.ko
 minidump.ko
 msm_qmp.ko
 msm_dma_iommu_mapping.ko
@@ -43,12 +44,17 @@ clk-qcom.ko
 clk-dummy.ko
 gdsc-regulator.ko
 gcc-sm8150.ko
+gcc-sc8180x.ko
+gh_msgq.ko
+gh_rm_drv.ko
+camcc-sc8180x.ko
 camcc-sm8150.ko
 dispcc-sm8250.ko
 icc-bcm-voter.ko
 icc-rpmh.ko
 qnoc-qos.ko
 qnoc-sm8150.ko
+qnoc-sc8180x.ko
 icc-debug.ko
 qcom-cpufreq-hw.ko
 socinfo.ko
@@ -56,3 +62,8 @@ qcom_ipc_logging.ko
 phy-qcom-ufs.ko
 phy-qcom-ufs-qmp-v4.ko
 ufs_qcom.ko
+crypto-qti-common.ko
+ufshcd-crypto-qti.ko
+crypto-qti-tz.ko
+qcom_logbuf_vh.ko
+mem-hooks.ko

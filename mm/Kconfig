@@ -920,7 +920,7 @@ config ANON_VMA_NAME
 config LRU_GEN
 	bool "Multi-Gen LRU"
 	depends on MMU
-	# the following options can use up the spare bits in page flags
+	# make sure page->flags has enough spare bits
 	depends on !MAXSMP && (64BIT || !SPARSEMEM || SPARSEMEM_VMEMMAP)
 	help
 	  A high performance LRU implementation to overcommit memory. See
@@ -943,6 +943,7 @@ config LRU_GEN_STATS
 # }
 
 source "mm/damon/Kconfig"
+source "mm/oplus_mm/Kconfig"
 
 config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
        def_bool n
@@ -950,7 +951,7 @@ config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
 config SPECULATIVE_PAGE_FAULT
 	bool "Speculative page faults"
 	default y
-	depends on ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT && MMU && SMP
+	depends on ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT && MMU && SMP && !NUMA
 	help
 	  Try to handle user space page faults without holding the mmap lock.
 

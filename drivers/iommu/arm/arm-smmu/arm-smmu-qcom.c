@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/acpi.h>
@@ -203,6 +204,8 @@ static int qcom_adreno_smmu_init_context(struct arm_smmu_domain *smmu_domain,
 {
 	struct adreno_smmu_priv *priv;
 	const struct device_node *np = smmu_domain->smmu->dev->of_node;
+	struct qcom_io_pgtable_info *input_info =
+		container_of(pgtbl_cfg, struct qcom_io_pgtable_info, cfg);
 
 	smmu_domain->cfg.flush_walk_prefer_tlbiasid = true;
 
@@ -229,6 +232,7 @@ static int qcom_adreno_smmu_init_context(struct arm_smmu_domain *smmu_domain,
 	priv->get_ttbr1_cfg = qcom_adreno_smmu_get_ttbr1_cfg;
 	priv->set_ttbr0_cfg = qcom_adreno_smmu_set_ttbr0_cfg;
 	priv->get_fault_info = qcom_adreno_smmu_get_fault_info;
+	priv->pgtbl_info = *input_info;
 
 	/*
 	 * These functions are only compatible with the data structures used by the
@@ -481,7 +485,7 @@ static const struct arm_smmu_impl qcom_smmu_impl = {
 #define QTB_OVR_ECATS_STATUS_DONE	BIT(0)
 
 #define QTB_OVR_ECATS_OUTFLD0			0x458
-#define QTB_OVR_ECATS_OUTFLD0_PA		GENMASK(63, 12)
+#define QTB_OVR_ECATS_OUTFLD0_PA		GENMASK_ULL(63, 12)
 #define QTB_OVR_ECATS_OUTFLD0_FAULT_TYPE	GENMASK(5, 4)
 #define QTB_OVR_ECATS_OUTFLD0_FAULT		BIT(0)
 

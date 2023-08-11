@@ -21,6 +21,7 @@
 #include <linux/vmstat.h>
 #include <linux/writeback.h>
 #include <linux/page-flags.h>
+#include <linux/android_vendor.h>
 
 struct mem_cgroup;
 struct obj_cgroup;
@@ -353,6 +354,10 @@ struct mem_cgroup {
 	struct lru_gen_mm_list mm_list;
 #endif
 
+	/* for dynamic low */
+	ANDROID_VENDOR_DATA(1);
+	ANDROID_OEM_DATA_ARRAY(1, 2);
+
 	struct mem_cgroup_per_node *nodeinfo[];
 };
 
@@ -376,6 +381,9 @@ enum page_memcg_data_flags {
 #define MEMCG_DATA_FLAGS_MASK (__NR_MEMCG_DATA_FLAGS - 1)
 
 static inline bool PageMemcgKmem(struct page *page);
+
+void do_traversal_all_lruvec(void);
+struct lruvec *page_to_lruvec(struct page *page, pg_data_t *pgdat);
 
 /*
  * After the initialization objcg->memcg is always pointing at
@@ -990,19 +998,30 @@ static inline void mod_memcg_state(struct mem_cgroup *memcg,
 
 static inline unsigned long memcg_page_state(struct mem_cgroup *memcg, int idx)
 {
-	return READ_ONCE(memcg->vmstats.state[idx]);
+	long x = READ_ONCE(memcg->vmstats.state[idx]);
+#ifdef CONFIG_SMP
+	if (x < 0)
+		x = 0;
+#endif
+	return x;
 }
 
 static inline unsigned long lruvec_page_state(struct lruvec *lruvec,
 					      enum node_stat_item idx)
 {
 	struct mem_cgroup_per_node *pn;
+	long x;
 
 	if (mem_cgroup_disabled())
 		return node_page_state(lruvec_pgdat(lruvec), idx);
 
 	pn = container_of(lruvec, struct mem_cgroup_per_node, lruvec);
-	return READ_ONCE(pn->lruvec_stats.state[idx]);
+	x = READ_ONCE(pn->lruvec_stats.state[idx]);
+#ifdef CONFIG_SMP
+	if (x < 0)
+		x = 0;
+#endif
+	return x;
 }
 
 static inline unsigned long lruvec_page_state_local(struct lruvec *lruvec,
@@ -1026,6 +1045,7 @@ static inline unsigned long lruvec_page_state_local(struct lruvec *lruvec,
 }
 
 void mem_cgroup_flush_stats(void);
+void mem_cgroup_flush_stats_delayed(void);
 
 void __mod_memcg_lruvec_state(struct lruvec *lruvec, enum node_stat_item idx,
 			      int val);
@@ -1159,6 +1179,15 @@ static inline struct mem_cgroup *page_memcg_check(struct page *page)
 static inline bool PageMemcgKmem(struct page *page)
 {
 	return false;
+}
+
+static inline struct lruvec *page_to_lruvec(struct page *page, pg_data_t *pgdat)
+{
+	return NULL;
+}
+
+static inline void do_traversal_all_lruvec(void)
+{
 }
 
 static inline bool mem_cgroup_is_root(struct mem_cgroup *memcg)
@@ -1455,6 +1484,10 @@ static inline unsigned long lruvec_page_state_local(struct lruvec *lruvec,
 }
 
 static inline void mem_cgroup_flush_stats(void)
+{
+}
+
+static inline void mem_cgroup_flush_stats_delayed(void)
 {
 }
 

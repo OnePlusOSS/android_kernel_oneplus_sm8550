@@ -76,7 +76,9 @@ int rpmsg_chrdev_eptdev_destroy(struct device *dev, void *data)
 
 	mutex_lock(&eptdev->ept_lock);
 	if (eptdev->ept) {
-		rpmsg_destroy_ept(eptdev->ept);
+		/* The default endpoint is released by the rpmsg core */
+		if (!eptdev->default_ept)
+			rpmsg_destroy_ept(eptdev->ept);
 		eptdev->ept = NULL;
 	}
 	mutex_unlock(&eptdev->ept_lock);
@@ -91,8 +93,8 @@ int rpmsg_chrdev_eptdev_destroy(struct device *dev, void *data)
 }
 EXPORT_SYMBOL(rpmsg_chrdev_eptdev_destroy);
 
-static int rpmsg_ept_cb(struct rpmsg_device *rpdev, void *buf, int len,
-			void *priv, u32 addr)
+static int rpmsg_ept_copy_cb(struct rpmsg_device *rpdev, void *buf, int len,
+			     void *priv, u32 addr)
 {
 	struct rpmsg_eptdev *eptdev = priv;
 	struct sk_buff *skb;
@@ -113,6 +115,43 @@ static int rpmsg_ept_cb(struct rpmsg_device *rpdev, void *buf, int len,
 	return 0;
 }
 
+static int rpmsg_ept_no_copy_cb(struct rpmsg_device *rpdev, void *buf, int len,
+				void *priv, u32 addr)
+{
+	struct rpmsg_eptdev *eptdev = priv;
+	struct sk_buff *skb;
+
+	skb = alloc_skb(0, GFP_ATOMIC);
+	if (!skb)
+		return -ENOMEM;
+
+	skb->head = buf;
+	skb->data = buf;
+	skb_reset_tail_pointer(skb);
+	skb_set_end_offset(skb, len);
+	skb_put(skb, len);
+
+	spin_lock(&eptdev->queue_lock);
+	skb_queue_tail(&eptdev->queue, skb);
+	spin_unlock(&eptdev->queue_lock);
+
+	/* wake up any blocking processes, waiting for new data */
+	wake_up_interruptible(&eptdev->readq);
+
+	return RPMSG_DEFER;
+}
+
+static int rpmsg_ept_cb(struct rpmsg_device *rpdev, void *buf, int len,
+			void *priv, u32 addr)
+{
+	struct rpmsg_eptdev *eptdev = priv;
+	rpmsg_rx_cb_t cb;
+
+	cb = (eptdev->ept->rx_done) ? rpmsg_ept_no_copy_cb : rpmsg_ept_copy_cb;
+
+	return cb(rpdev, buf, len, priv, addr);
+}
+
 static int rpmsg_eptdev_open(struct inode *inode, struct file *filp)
 {
 	struct rpmsg_eptdev *eptdev = cdev_to_eptdev(inode->i_cdev);
@@ -120,8 +159,11 @@ static int rpmsg_eptdev_open(struct inode *inode, struct file *filp)
 	struct rpmsg_device *rpdev = eptdev->rpdev;
 	struct device *dev = &eptdev->dev;
 
-	if (eptdev->ept)
+	mutex_lock(&eptdev->ept_lock);
+	if (eptdev->ept) {
+		mutex_unlock(&eptdev->ept_lock);
 		return -EBUSY;
+	}
 
 	get_device(dev);
 
@@ -137,11 +179,13 @@ static int rpmsg_eptdev_open(struct inode *inode, struct file *filp)
 	if (!ept) {
 		dev_err(dev, "failed to open %s\n", eptdev->chinfo.name);
 		put_device(dev);
+		mutex_unlock(&eptdev->ept_lock);
 		return -EINVAL;
 	}
 
 	eptdev->ept = ept;
 	filp->private_data = eptdev;
+	mutex_unlock(&eptdev->ept_lock);
 
 	return 0;
 }
@@ -210,6 +254,15 @@ static ssize_t rpmsg_eptdev_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	if (copy_to_iter(skb->data, use, to) != use)
 		use = -EFAULT;
 
+	if (eptdev->ept->rx_done) {
+		rpmsg_rx_done(eptdev->ept, skb->data);
+		/*
+		 * Data memory is freed by rpmsg_rx_done(), reset the skb data
+		 * pointers so kfree_skb() does not try to free a second time.
+		 */
+		skb->head = NULL;
+		skb->data = NULL;
+	}
 	kfree_skb(skb);
 
 	return use;
