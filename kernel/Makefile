@@ -41,9 +41,6 @@ KCSAN_SANITIZE_kcov.o := n
 UBSAN_SANITIZE_kcov.o := n
 CFLAGS_kcov.o := $(call cc-option, -fno-conserve-stack) -fno-stack-protector
 
-# Don't instrument error handlers
-CFLAGS_REMOVE_cfi.o := $(CC_FLAGS_CFI)
-
 obj-y += sched/
 obj-y += locking/
 obj-y += power/
@@ -162,6 +159,39 @@ $(obj)/kheaders_data.tar.xz: FORCE
 	$(call cmd,genikh)
 
 clean-files := kheaders_data.tar.xz kheaders.md5
+
+#ifdef OPLUS_FEATURE_PERFORMANCE_SCHED
+obj-$(CONFIG_OPLUS_FEATURE_PERFORMANCE_SCHED) += oplus_cpu/sched/
+#endif /* OPLUS_FEATURE_PERFORMANCE_SCHED */
+
+#ifdef OPLUS_FEATURE_OMRG
+obj-$(CONFIG_OPLUS_OMRG) += oplus_cpu/oplus_omrg/
+#endif /* OPLUS_FEATURE_OMRG */
+
+#ifdef OPLUS_FEATURE_SUGOV_POWER_EFFIENCY
+obj-$(CONFIG_OPLUS_FEATURE_SUGOV_POWER_EFFIENCY) += oplus_cpu/cpufreq_effiency/
+#endif /* OPLUS_FEATURE_SUGOV_POWER_EFFIENCY */
+
+#ifdef OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING
+obj-$(CONFIG_OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING) += oplus_cpu/cpufreq_bouncing/
+#endif /* OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING */
+
+#ifdef OPLUS_FEATURE_OCH
+obj-$(CONFIG_OPLUS_FEATURE_OCH) += oplus_cpu/cpufreq_health/
+#endif /* OPLUS_FEATURE_OCH */
+
+#ifdef OPLUS_FEATURE_THERMAL_HORAE
+obj-$(CONFIG_HORAE_THERMAL_SHELL) += oplus_cpu/thermal/
+#endif /* OPLUS_FEATURE_THERMAL_HORAE */
+#ifdef OPLUS_FEATURE_ATD
+obj-$(CONFIG_OPLUS_FEATURE_ATD) += oplus_cpu/detection/
+#endif
+
+obj-$(CONFIG_OPLUS_CPU_FREQ_GOV_UAG) += oplus_cpu/uad/
+
+#ifdef OPLUS_FEATURE_ABNORMAL_FLAG
+obj-$(CONFIG_OPLUS_FEATURE_ABNORMAL_FLAG) += oplus_cpu/oplus_overload/
+#endif
 
 #
 # ANDROID: GKI: Generate headerfiles required for gki_module.o

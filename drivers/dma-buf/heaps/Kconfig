@@ -106,3 +106,9 @@ config QCOM_DMABUF_HEAPS_TUI_CARVEOUT
 	  This heap is controlled from an ioctl, and memory is transferred
 	  to it from the Primary VM. Not GKI-Compatible as it cannot
 	  be built as a module.
+
+config OPLUS_FEATURE_MM_BOOSTPOOL
+	bool "Oplus DMA-BUF heaps boost-pool library"
+	depends on QCOM_DMABUF_HEAPS && QCOM_DMABUF_HEAPS_SYSTEM
+	help
+	  Choose this option to enable the DMA-BUF heaps boost-pool library.

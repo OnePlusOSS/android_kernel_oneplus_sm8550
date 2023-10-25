@@ -17,6 +17,8 @@
 #include <linux/slab.h>
 #include <linux/soc/qcom/qcom_aoss.h>
 #include <linux/ipc_logging.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
 
 #define QMP_DESC_MAGIC			0x0
 #define QMP_DESC_VERSION		0x4
@@ -92,6 +94,7 @@ struct qmp {
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 	struct dentry *debugfs_file;
 #endif /* CONFIG_DEBUG_FS */
+	struct proc_dir_entry *proc_file;   //<<-- add proc file
 };
 
 struct qmp_pd {
@@ -518,8 +521,10 @@ static int qmp_cooling_devices_register(struct qmp *qmp)
 			continue;
 		ret = qmp_cooling_device_add(qmp, &qmp->cooling_devs[count++],
 					     child);
-		if (ret)
+		if (ret) {
+			of_node_put(child);
 			goto unroll;
+		}
 	}
 
 	if (!count)
@@ -619,6 +624,39 @@ static const struct file_operations aoss_dbg_fops = {
 };
 #endif /* CONFIG_DEBUG_FS */
 
+static int aoss_proc_open(struct inode *inode, struct file *file)
+{
+       printk(KERN_ERR "aoss_proc_open \n");
+       return single_open(file, NULL, NULL);
+}
+
+static ssize_t aoss_proc_write(struct file *file, const char __user *userstr,
+                             size_t len, loff_t *pos)
+{
+
+       struct qmp *qmp  = (struct qmp *)PDE_DATA(file_inode(file));
+
+       char buf[QMP_MSG_LEN] = {};
+       int ret;
+
+       if (!len || len >= QMP_MSG_LEN)
+               return -EINVAL;
+
+       ret = copy_from_user(buf, userstr, len);
+       if (ret)
+               return -EFAULT;
+       printk(KERN_ERR "aoss_proc_write qmp = %px\n",qmp);
+       ret = qmp_send(qmp, strim(buf), QMP_MSG_LEN);
+
+       return ret ? ret : len;
+}
+
+static const struct proc_ops aoss_proc_ops = {
+       .proc_open      = aoss_proc_open,
+       .proc_release   = single_release,
+       .proc_write     = aoss_proc_write,
+};
+
 static int qmp_probe(struct platform_device *pdev)
 {
 	struct resource *res;
@@ -681,6 +719,15 @@ static int qmp_probe(struct platform_device *pdev)
 						qmp, &aoss_dbg_fops);
 #endif /* CONFIG_DEBUG_FS */
 
+	qmp->proc_file = proc_create_data("aoss_send_message", 0220, NULL, &aoss_proc_ops, qmp);
+
+	if (!qmp->proc_file)
+	{
+			ret = -ENOMEM;
+			goto err_remove_qdss_clk;
+	}
+	dev_err(&pdev->dev, "qmp_probe qmp = %px\n",qmp);
+
 	return 0;
 
 err_remove_qdss_clk:
@@ -700,6 +747,7 @@ static int qmp_remove(struct platform_device *pdev)
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 	debugfs_remove(qmp->debugfs_file);
 #endif /* CONFIG_DEBUG_FS */
+	remove_proc_entry("aoss_send_message", NULL);
 
 	qmp_qdss_clk_remove(qmp);
 	qmp_pd_remove(qmp);

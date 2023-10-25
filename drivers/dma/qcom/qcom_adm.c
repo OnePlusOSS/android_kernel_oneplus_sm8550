@@ -900,6 +900,5 @@ static struct platform_driver adm_dma_driver = {
 
 module_platform_driver(adm_dma_driver);
 
-MODULE_AUTHOR("Andy Gross <agross@codeaurora.org>");
 MODULE_DESCRIPTION("QCOM ADM DMA engine driver");
 MODULE_LICENSE("GPL v2");

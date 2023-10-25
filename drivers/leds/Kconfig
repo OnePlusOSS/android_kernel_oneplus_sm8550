@@ -927,4 +927,6 @@ source "drivers/leds/flash/Kconfig"
 comment "LED Triggers"
 source "drivers/leds/trigger/Kconfig"
 
+source "drivers/leds/aw210xx/Kconfig"
+
 endif # NEW_LEDS

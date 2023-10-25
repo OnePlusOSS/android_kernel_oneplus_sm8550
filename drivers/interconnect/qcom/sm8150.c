@@ -2709,8 +2709,6 @@ static struct platform_driver qnoc_driver = {
 	.driver = {
 		.name = "qnoc-sm8150",
 		.of_match_table = qnoc_of_match,
-		.pm = &qnoc_sm8150_pm_ops,
-		.sync_state = qcom_icc_rpmh_sync_state,
 	},
 };
 module_platform_driver(qnoc_driver);

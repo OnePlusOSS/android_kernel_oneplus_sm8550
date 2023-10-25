@@ -678,6 +678,12 @@ static void msm_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 
 	g = &pctrl->soc->groups[offset];
 
+//#ifdef OPLUS_ARCH_EXTENDS
+	val = msm_readl_ctl(pctrl, g);
+	val |= BIT(EGPIO_ENABLE);
+	msm_writel_ctl(val, pctrl, g);
+//#endif /* OPLUS_ARCH_EXTENDS */
+
 	raw_spin_lock_irqsave(&pctrl->lock, flags);
 
 	val = msm_readl_io(pctrl, g);

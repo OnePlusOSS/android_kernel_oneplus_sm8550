@@ -543,6 +543,7 @@ static int smp2p_parse_ipc(struct qcom_smp2p *smp2p)
 	}
 
 	smp2p->ipc_regmap = syscon_node_to_regmap(syscon);
+	of_node_put(syscon);
 	if (IS_ERR(smp2p->ipc_regmap))
 		return PTR_ERR(smp2p->ipc_regmap);
 
@@ -562,6 +563,34 @@ static int smp2p_parse_ipc(struct qcom_smp2p *smp2p)
 	return 0;
 }
 
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+static char * smp2p_get_device_node_name(const struct device_node *np)
+{
+	char *name = NULL;
+	const char *node_name;
+	size_t len;
+
+	if (!np) {
+		pr_info("%s %d : name is NULL\n", __func__, __LINE__);
+		return NULL;
+	}
+
+	pr_info("%s %d : full name is %s\n", __func__, __LINE__, np->full_name);
+	node_name = kbasename(np->full_name);
+	len = strlen(node_name);
+
+	name = (char *)kzalloc(len+1, GFP_KERNEL);
+	if(!name) {
+		pr_info("%s %d : name is NULL\n", __func__, __LINE__);
+		return NULL;
+	}
+	strncpy(name, node_name, len);
+	pr_info("%s %d : name is %s\n", __func__, __LINE__, name);
+
+	return name;
+}
+#endif
+
 static int qcom_smp2p_probe(struct platform_device *pdev)
 {
 	struct smp2p_entry *entry;
@@ -571,6 +600,9 @@ static int qcom_smp2p_probe(struct platform_device *pdev)
 	const char *key;
 	int irq;
 	int ret;
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	char *object_name = NULL;
+#endif
 
 	if (!ilc)
 		ilc = ipc_log_context_create(SMP2P_LOG_PAGE_CNT, "smp2p", 0);
@@ -656,15 +688,30 @@ static int qcom_smp2p_probe(struct platform_device *pdev)
 	qcom_smp2p_kick(smp2p);
 
 	smp2p->irq = irq;
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	object_name = smp2p_get_device_node_name(pdev->dev.of_node);
+	if(!object_name) {
+		object_name = "smp2p";
+	}
+#else
 	smp2p->irq_devname = kasprintf(GFP_KERNEL, "smp2p_%d", smp2p->remote_pid);
 	if (!smp2p->irq_devname) {
 		ret = -ENOMEM;
 		goto unwind_interfaces;
 	}
+#endif
+
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	ret = devm_request_threaded_irq(&pdev->dev, irq,
+					NULL, qcom_smp2p_intr,
+					IRQF_ONESHOT,
+					object_name, (void *)smp2p);
+#else
 	ret = devm_request_threaded_irq(&pdev->dev, irq,
 					NULL, qcom_smp2p_intr,
 					IRQF_ONESHOT,
 					smp2p->irq_devname, (void *)smp2p);
+#endif
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request interrupt\n");
 		goto unwind_interfaces;

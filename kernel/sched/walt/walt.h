@@ -150,6 +150,7 @@ extern struct walt_sched_cluster *sched_cluster[WALT_NR_CPUS];
 
 /*END SCHED.H PORT*/
 
+extern u64 walt_sched_clock(void);
 extern int num_sched_clusters;
 extern unsigned int sched_capacity_margin_up[WALT_NR_CPUS];
 extern unsigned int sched_capacity_margin_down[WALT_NR_CPUS];
@@ -242,6 +243,10 @@ extern unsigned int sysctl_panic_on_walt_bug;
 extern int sched_dynamic_tp_handler(struct ctl_table *table, int write,
 			void __user *buffer, size_t *lenp, loff_t *ppos);
 
+#ifdef CONFIG_OPLUS_FEATURE_SUGOV_TL
+extern unsigned int get_targetload(struct cpufreq_policy *policy);
+#endif /* CONFIG_OPLUS_FEATURE_SUGOV_TL */
+
 extern struct list_head cluster_head;
 #define for_each_sched_cluster(cluster) \
 	list_for_each_entry_rcu(cluster, &cluster_head, list)
@@ -270,7 +275,7 @@ static inline unsigned int sched_cpu_legacy_freq(int cpu)
 extern __read_mostly bool sched_freq_aggr_en;
 static inline void walt_enable_frequency_aggregation(bool enable)
 {
-	sched_freq_aggr_en = enable;
+/* disable frequency_aggregation since we have already enable frameboost */
 }
 
 #ifndef CONFIG_IRQ_TIME_ACCOUNTING
@@ -317,6 +322,9 @@ extern unsigned int sched_lib_mask_force;
 #define WALT_CPUFREQ_PL			0x8
 #define WALT_CPUFREQ_EARLY_DET		0x10
 #define WALT_CPUFREQ_BOOST_UPDATE	0x20
+#if IS_ENABLED(CONFIG_OPLUS_CPUFREQ_IOWAIT_PROTECT)
+#define WALT_CPUFREQ_IOWAIT		(1U << 10)
+#endif
 
 #define CPUFREQ_REASON_LOAD		0
 #define CPUFREQ_REASON_BTR		0x1

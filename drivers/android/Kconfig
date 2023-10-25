@@ -109,6 +109,9 @@ config ANDROID_VENDOR_OEM_DATA
 
 	  If even slightly unsure, say Y.
 
+#ifdef CONFIG_OPLUS_BINDER_STRATEGY
+source "drivers/android/oplus_binder/Kconfig"
+#endif
 endif # if ANDROID
 
 endmenu

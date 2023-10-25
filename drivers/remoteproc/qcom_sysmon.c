@@ -59,6 +59,7 @@ struct qcom_sysmon {
 	struct completion comp;
 	struct completion ind_comp;
 	struct completion shutdown_comp;
+	struct completion ssctl_comp;
 	struct mutex lock;
 
 	bool ssr_ack;
@@ -472,6 +473,8 @@ static int ssctl_new_server(struct qmi_handle *qmi, struct qmi_service *svc)
 
 	svc->priv = sysmon;
 
+	complete(&sysmon->ssctl_comp);
+
 	return 0;
 }
 
@@ -509,20 +512,6 @@ static void sysmon_notif_timeout_handler(struct timer_list *t)
 		     subdevice_state_string[sysmon->state]);
 }
 
-static void sysmon_shutdown_notif_timeout_handler(struct timer_list *t)
-{
-	struct notif_timeout_data *td = from_timer(td, t, timer);
-	struct qcom_sysmon *sysmon = container_of(td, struct qcom_sysmon, timeout_data);
-
-	if (IS_ENABLED(CONFIG_QCOM_PANIC_ON_NOTIF_TIMEOUT) &&
-	    system_state != SYSTEM_RESTART &&
-	    system_state != SYSTEM_POWER_OFF &&
-	    system_state != SYSTEM_HALT &&
-	    !qcom_device_shutdown_in_progress)
-		panic(shutdown_timeout_msg, sysmon->name);
-	else
-		WARN(1, shutdown_timeout_msg, sysmon->name);
-}
 
 static inline void send_event(struct qcom_sysmon *sysmon, struct qcom_sysmon *source)
 {
@@ -574,6 +563,7 @@ static int sysmon_start(struct rproc_subdev *subdev)
 
 	trace_rproc_qcom_event(dev_name(sysmon->rproc->dev.parent), SYSMON_SUBDEV_NAME, "start");
 
+	reinit_completion(&sysmon->ssctl_comp);
 	mutex_lock(&sysmon->state_lock);
 	sysmon->state = QCOM_SSR_AFTER_POWERUP;
 	blocking_notifier_call_chain(&sysmon_notifiers, 0, (void *)sysmon);
@@ -597,7 +587,6 @@ static int sysmon_start(struct rproc_subdev *subdev)
 
 static void sysmon_stop(struct rproc_subdev *subdev, bool crashed)
 {
-	unsigned long timeout;
 	struct qcom_sysmon *sysmon = container_of(subdev, struct qcom_sysmon, subdev);
 	struct qcom_rproc_ssr *ssr;
 
@@ -619,10 +608,10 @@ static void sysmon_stop(struct rproc_subdev *subdev, bool crashed)
 	/* Don't request graceful shutdown if we've crashed */
 	if (crashed)
 		return;
-
-	sysmon->timeout_data.timer.function = sysmon_shutdown_notif_timeout_handler;
-	timeout = jiffies + msecs_to_jiffies(SYSMON_NOTIF_TIMEOUT);
-	mod_timer(&sysmon->timeout_data.timer, timeout);
+	if (sysmon->ssctl_instance) {
+		if (!wait_for_completion_timeout(&sysmon->ssctl_comp, HZ / 2))
+			dev_err(sysmon->dev, "timeout waiting for ssctl service\n");
+	}
 
 	if (sysmon->ssctl_version)
 		sysmon->shutdown_acked = ssctl_request_shutdown(sysmon);
@@ -854,7 +843,7 @@ struct qcom_sysmon *qcom_add_sysmon_subdev(struct rproc *rproc,
 	init_completion(&sysmon->comp);
 	init_completion(&sysmon->ind_comp);
 	init_completion(&sysmon->shutdown_comp);
-	timer_setup(&sysmon->timeout_data.timer, sysmon_notif_timeout_handler, 0);
+	init_completion(&sysmon->ssctl_comp);
 	mutex_init(&sysmon->lock);
 	mutex_init(&sysmon->state_lock);
 

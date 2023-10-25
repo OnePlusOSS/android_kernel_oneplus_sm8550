@@ -1037,6 +1037,15 @@ static inline bool fastrpc_get_persistent_map(size_t len, struct fastrpc_mmap **
 			map->is_persistent && !map->in_use) {
 			*pers_map = map;
 			map->in_use = true;
+			//#ifdef OPLUS_ARCH_EXTENDS
+			/* [PATCH] msm: ADSPRPC: Prevent mapping refcount for persistent mapping from going bad */
+			/*
+			 * Incrementing map reference count when getting
+			 * the map to avoid negative reference count when
+			 * freeing the map.
+			 */
+			map->refs++;
+			//#endif /* OPLUS_ARCH_EXTENDS */
 			found = true;
 			break;
 		}
@@ -4694,6 +4703,14 @@ static int fastrpc_mmap_remove_ssr(struct fastrpc_file *fl, int locked)
 					}
 					spin_lock_irqsave(&me->hlock, irq_flags);
 					map->in_use = false;
+					//#ifdef OPLUS_ARCH_EXTENDS
+					/* [PATCH] msm: ADSPRPC: Prevent mapping refcount for persistent mapping from going bad */
+					/*
+					 * decrementing refcount for persistent mappings
+					 * as incrementing it in fastrpc_get_persistent_map
+					 */
+					map->refs--;
+					//#endif /* OPLUS_ARCH_EXTENDS */
 				}
 				if (map->is_persistent) {
 					match = NULL;
