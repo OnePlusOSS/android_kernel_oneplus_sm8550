@@ -634,11 +634,14 @@ struct ufs_qcom_host {
 	atomic_t scale_up;
 	atomic_t clks_on;
 	unsigned long load_delay_ms;
-#define NUM_REQS_HIGH_THRESH 64
+#define NUM_REQS_JUDGE_THRESH 100
+#define REQS_JUDGE_SHORT_TIME 50000000
+#define REQS_JUDGE_LONG_TIME 150000000
+
 #define NUM_REQS_LOW_THRESH 32
 	atomic_t num_reqs_threshold;
 	bool cur_freq_vote;
-	struct delayed_work fwork;
+	struct work_struct fwork;
 	bool cpufreq_dis;
 	unsigned int min_cpu_scale_freq;
 	unsigned int max_cpu_scale_freq;
@@ -654,6 +657,7 @@ struct ufs_qcom_host {
 	cpumask_t perf_mask;
 	cpumask_t def_mask;
 	u32 vccq_lpm_uV;
+	ktime_t throughput_judge_time;
 };
 
 static inline u32

@@ -135,12 +135,28 @@ static void f2fs_finish_read_bio(struct bio *bio, bool in_task)
 		struct page *page = bv->bv_page;
 
 		if (f2fs_is_compressed_page(page)) {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			/*NOTE: This scenario does not support PageCont!*/
+			CHP_BUG_ON(PageCont(page));
+#endif
 			if (bio->bi_status)
 				f2fs_end_read_compressed_page(page, true, 0,
 							in_task);
 			f2fs_put_page_dic(page, in_task);
 			continue;
 		}
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (PageCont(page)) {
+			if (bio->bi_status || PageError(page)) {
+				ClearPageUptodate(page);
+				SetPageError(page);
+			}
+
+			set_cont_pte_uptodate_and_unlock(page);
+			continue;
+		}
+#endif
 
 		/* PG_error was set if decryption or verity failed. */
 		if (bio->bi_status || PageError(page)) {
@@ -2851,7 +2867,7 @@ out:
 	}
 	unlock_page(page);
 	if (!S_ISDIR(inode->i_mode) && !IS_NOQUOTA(inode) &&
-			!F2FS_I(inode)->cp_task && allow_balance)
+			!F2FS_I(inode)->wb_task && allow_balance)
 		f2fs_balance_fs(sbi, need_balance_fs);
 
 	if (unlikely(f2fs_cp_error(sbi))) {
@@ -3149,7 +3165,7 @@ static inline bool __should_serialize_io(struct inode *inode,
 					struct writeback_control *wbc)
 {
 	/* to avoid deadlock in path of data flush */
-	if (F2FS_I(inode)->cp_task)
+	if (F2FS_I(inode)->wb_task)
 		return false;
 
 	if (!S_ISREG(inode->i_mode))

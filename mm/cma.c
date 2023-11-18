@@ -47,6 +47,10 @@ struct cma cma_areas[MAX_CMA_AREAS];
 unsigned cma_area_count;
 static DEFINE_MUTEX(cma_mutex);
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+DEFINE_SPINLOCK(cont_pte_cma_spinlock);
+#endif
+
 phys_addr_t cma_get_base(const struct cma *cma)
 {
 	return PFN_PHYS(cma->base_pfn);
@@ -93,19 +97,35 @@ static void cma_clear_bitmap(struct cma *cma, unsigned long pfn,
 {
 	unsigned long bitmap_no, bitmap_count;
 	unsigned long flags;
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	bool spinlock = is_cont_pte_cma(cma);
+#endif
 
 	bitmap_no = (pfn - cma->base_pfn) >> cma->order_per_bit;
 	bitmap_count = cma_bitmap_pages_to_bits(cma, count);
 
-	spin_lock_irqsave(&cma->lock, flags);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (spinlock)
+		spin_lock_irqsave(&cont_pte_cma_spinlock, flags);
+	else
+#endif
+		spin_lock_irqsave(&cma->lock, flags);
 	bitmap_clear(cma->bitmap, bitmap_no, bitmap_count);
-	spin_unlock_irqrestore(&cma->lock, flags);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (spinlock)
+		spin_unlock_irqrestore(&cont_pte_cma_spinlock, flags);
+	else
+#endif
+		spin_unlock_irqrestore(&cma->lock, flags);
 }
 
 static void __init cma_activate_area(struct cma *cma)
 {
 	unsigned long base_pfn = cma->base_pfn, pfn;
 	struct zone *zone;
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	bool spinlock = is_cont_pte_cma(cma);
+#endif
 
 	cma->bitmap = bitmap_zalloc(cma_bitmap_maxno(cma), GFP_KERNEL);
 	if (!cma->bitmap)
@@ -128,7 +148,12 @@ static void __init cma_activate_area(struct cma *cma)
 	     pfn += pageblock_nr_pages)
 		init_cma_reserved_pageblock(pfn_to_page(pfn));
 
-	spin_lock_init(&cma->lock);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (spinlock)
+		spin_lock_init(&cont_pte_cma_spinlock);
+	else
+#endif
+		spin_lock_init(&cma->lock);
 
 #ifdef CONFIG_CMA_DEBUGFS
 	INIT_HLIST_HEAD(&cma->mem_head);
@@ -402,7 +427,13 @@ static void cma_debug_show_areas(struct cma *cma)
 	unsigned long nr_part, nr_total = 0;
 	unsigned long nbits = cma_bitmap_maxno(cma);
 
-	spin_lock_irq(&cma->lock);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	bool spinlock = is_cont_pte_cma(cma);
+	if (spinlock)
+		spin_lock_irq(&cont_pte_cma_spinlock);
+	else
+#endif
+		spin_lock_irq(&cma->lock);
 	pr_info("number of available pages: ");
 	for (;;) {
 		next_zero_bit = find_next_zero_bit(cma->bitmap, nbits, start);
@@ -417,7 +448,12 @@ static void cma_debug_show_areas(struct cma *cma)
 		start = next_zero_bit + nr_zero;
 	}
 	pr_cont("=> %lu free of %lu total pages\n", nr_total, cma->count);
-	spin_unlock_irq(&cma->lock);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (spinlock)
+		spin_unlock_irq(&cont_pte_cma_spinlock);
+	else
+#endif
+		spin_unlock_irq(&cma->lock);
 }
 #else
 static inline void cma_debug_show_areas(struct cma *cma) { }
@@ -445,6 +481,10 @@ struct page *cma_alloc(struct cma *cma, unsigned long count,
 	int ret = -ENOMEM;
 	int num_attempts = 0;
 	int max_retries = 5;
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	bool lock = (cma == cont_pte_cma);
+	bool spinlock = is_cont_pte_cma(cma);
+#endif
 
 	if (!cma || !cma->count || !cma->bitmap)
 		goto out;
@@ -467,13 +507,23 @@ struct page *cma_alloc(struct cma *cma, unsigned long count,
 
 	trace_android_vh_cma_alloc_retry(cma->name, &max_retries);
 	for (;;) {
-		spin_lock_irq(&cma->lock);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (spinlock)
+			spin_lock_irq(&cont_pte_cma_spinlock);
+		else
+#endif
+			spin_lock_irq(&cma->lock);
 		bitmap_no = bitmap_find_next_zero_area_off(cma->bitmap,
 				bitmap_maxno, start, bitmap_count, mask,
 				offset);
 		if (bitmap_no >= bitmap_maxno) {
 			if ((num_attempts < max_retries) && (ret == -EBUSY)) {
-				spin_unlock_irq(&cma->lock);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+				if (spinlock)
+					spin_unlock_irq(&cont_pte_cma_spinlock);
+				else
+#endif
+					spin_unlock_irq(&cma->lock);
 
 				if (fatal_signal_pending(current)) {
 					ret = -EINTR;
@@ -493,7 +543,12 @@ struct page *cma_alloc(struct cma *cma, unsigned long count,
 				num_attempts++;
 				continue;
 			} else {
-				spin_unlock_irq(&cma->lock);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+				if (spinlock)
+					spin_unlock_irq(&cont_pte_cma_spinlock);
+				else
+#endif
+					spin_unlock_irq(&cma->lock);
 				break;
 			}
 		}
@@ -503,13 +558,24 @@ struct page *cma_alloc(struct cma *cma, unsigned long count,
 		 * our exclusive use. If the migration fails we will take the
 		 * lock again and unmark it.
 		 */
-		spin_unlock_irq(&cma->lock);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (spinlock)
+			spin_unlock_irq(&cont_pte_cma_spinlock);
+		else
+#endif
+			spin_unlock_irq(&cma->lock);
 
 		pfn = cma->base_pfn + (bitmap_no << cma->order_per_bit);
-		mutex_lock(&cma_mutex);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (lock)
+#endif
+			mutex_lock(&cma_mutex);
 		ret = alloc_contig_range(pfn, pfn + count, MIGRATE_CMA,
 				     GFP_KERNEL | (no_warn ? __GFP_NOWARN : 0));
-		mutex_unlock(&cma_mutex);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (lock)
+#endif
+			mutex_unlock(&cma_mutex);
 		if (ret == 0) {
 			page = pfn_to_page(pfn);
 			break;
@@ -589,6 +655,18 @@ bool cma_release(struct cma *cma, const struct page *pages,
 	VM_BUG_ON(pfn + count > cma->base_pfn + cma->count);
 
 	free_contig_range(pfn, count);
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (PageContRefill(pages)) {
+		CHP_BUG_ON(!IS_ALIGNED(pfn, HPAGE_CONT_PTE_NR));
+		CHP_BUG_ON(count != HPAGE_CONT_PTE_NR);
+		if (TestClearPageContExtAlloc((struct page *)pages))
+			count_vm_chp_event(CHP_REFILL_EXTALLOC);
+		cont_pte_pool_add((struct page *)pages);
+		return true;
+	}
+#endif
+
 	cma_clear_bitmap(cma, pfn, count);
 	trace_cma_release(cma->name, pfn, pages, count);
 

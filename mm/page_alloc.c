@@ -77,6 +77,7 @@
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
+#include "chp_ext.h"
 #include "internal.h"
 #include "shuffle.h"
 #include "page_reporting.h"
@@ -728,9 +729,25 @@ static inline void free_the_page(struct page *page, unsigned int order)
  * This usage means that zero-order pages may not be compound.
  */
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+extern bool cma_release(struct cma *cma, const struct page *pages, unsigned int count);
+#endif
+
 void free_compound_page(struct page *page)
 {
 	mem_cgroup_uncharge(page);
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (within_cont_pte_cma(page_to_pfn(page)) && ContPteHugePageHead(page)) {
+		if (!is_migrate_cma_page(page))
+			pr_debug("@@@%s thp in cont_pte cma isn't CMA migratetype,type:%ld\n",
+				__func__, get_pageblock_migratetype(page));
+		if (!cma_release(cont_pte_cma, page, 1 << HPAGE_CONT_PTE_ORDER))
+			pr_err("@@@%s thp in cont_pte cma fails to release\n", __func__);
+		return;
+	}
+#endif
+
 	free_the_page(page, compound_order(page));
 }
 
@@ -739,7 +756,17 @@ void prep_compound_page(struct page *page, unsigned int order)
 	int i;
 	int nr_pages = 1 << order;
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/*
+	 * for original thp, we always prepare thp immeidately after allocating
+	 * it. so there is zero user at that time. but for cont_pte, we are
+	 * setting thp afer compeleting io, filemap fault might be accessing
+	 * the page, thus we need atomic protection.
+	 */
+	PageCont(page) ? SetPageHead(page) : __SetPageHead(page);
+#else
 	__SetPageHead(page);
+#endif
 	for (i = 1; i < nr_pages; i++) {
 		struct page *p = page + i;
 		p->mapping = TAIL_MAPPING;
@@ -1331,6 +1358,30 @@ static __always_inline bool free_pages_prepare(struct page *page,
 		free_page_pinner(page, order);
 		return false;
 	}
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (PageCont(page) && order != HPAGE_CONT_PTE_ORDER) {
+		pr_err("@@@FIXME:%s freeing basepage in ContPte Pages:%px pfn:%lx\n",
+			__func__, page, page_to_pfn(page));
+		dump_page(page, "freeing basepage");
+	}
+
+	if (PageCont(page) && PageHead(page)) {
+		int i;
+		bool bug = false;
+
+		for (i = 0; i < (1 << order); i++) {
+			if (atomic_read(&page[i]._mapcount) >= 0) {
+				pr_err("@@@FIXME:%s freeing subpage-mapped ContPte Pages:%px pfn:%lx i:%d\n",
+						__func__, page, page_to_pfn(page), i);
+				bug = true;
+			}
+
+		}
+		if (bug)
+			dump_page(page, "free subpage-mapped hugepage");
+		CHP_BUG_ON(bug);
+	}
+#endif
 
 	/*
 	 * Check tail pages before head page information is cleared to
@@ -1343,7 +1394,12 @@ static __always_inline bool free_pages_prepare(struct page *page,
 		VM_BUG_ON_PAGE(compound && compound_order(page) != order, page);
 
 		if (compound) {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (TestClearPageDoubleMap(page))
+				atomic_long_dec(&cont_pte_double_map_count);
+#else
 			ClearPageDoubleMap(page);
+#endif
 			ClearPageHasHWPoisoned(page);
 		}
 		for (i = 1; i < (1 << order); i++) {
@@ -1403,6 +1459,20 @@ static __always_inline bool free_pages_prepare(struct page *page,
 	 * happen after this.
 	 */
 	arch_free_page(page, order);
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (PageCont(page)) {
+		int i;
+
+		/* we never free a cont_pte separately, once it is true, sth is wrong */
+		CHP_BUG_ON(order != HPAGE_CONT_PTE_ORDER);
+
+		for (i = 0; i < (1 << order); i++) {
+			ClearPageCont(page + i);
+			ClearPageContIODoing(page + i);
+		}
+	}
+#endif
 
 	debug_pagealloc_unmap_pages(page, 1 << order);
 
@@ -1668,11 +1738,29 @@ static void __free_pages_ok(struct page *page, unsigned int order,
 	int migratetype;
 	unsigned long pfn = page_to_pfn(page);
 	struct zone *zone = page_zone(page);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	bool cont_pte = PageCont(page) && (PageTransCompound(page) || PageContExtAlloc(page));
+#endif
+	bool skip_free_unref_page = false;
 
 	if (!free_pages_prepare(page, order, true, fpi_flags))
 		return;
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (cont_pte) {
+		mod_chp_page_state(page, -1);
+		if (within_cont_pte_cma(page_to_pfn(page))) {
+			SetPageContRefill(page);
+			return;
+		}
+		TestClearPageContExtAlloc(page);
+	}
+#endif
+
 	migratetype = get_pfnblock_migratetype(page, pfn);
+	trace_android_vh_free_unref_page_bypass(page, order, migratetype, &skip_free_unref_page);
+	if (skip_free_unref_page)
+		return;
 
 	spin_lock_irqsave(&zone->lock, flags);
 	if (unlikely(has_isolate_pageblock(zone) ||
@@ -2540,6 +2628,13 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 		page = get_page_from_free_area(area, migratetype);
 		if (!page)
 			continue;
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		/* skip cont_pte_cma */
+		if (!cma_chunk_refill_ready && within_cont_pte_cma(page_to_pfn(page)))
+			continue;
+
+		CHP_BUG_ON(cma_chunk_refill_ready && within_cont_pte_cma(page_to_pfn(page)));
+#endif
 		del_page_from_free_list(page, zone, current_order);
 		expand(zone, page, order, current_order, migratetype);
 		set_pcppage_migratetype(page, migratetype);
@@ -2899,6 +2994,7 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 	struct page *page;
 	int order;
 	bool ret;
+	bool skip_unreserve_highatomic = false;
 
 	for_each_zone_zonelist_nodemask(zone, z, zonelist, ac->highest_zoneidx,
 								ac->nodemask) {
@@ -2908,6 +3004,11 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 		 */
 		if (!force && zone->nr_reserved_highatomic <=
 					pageblock_nr_pages)
+			continue;
+
+		trace_android_vh_unreserve_highatomic_bypass(force, zone,
+				&skip_unreserve_highatomic);
+		if (skip_unreserve_highatomic)
 			continue;
 
 		spin_lock_irqsave(&zone->lock, flags);
@@ -3165,6 +3266,10 @@ static struct list_head *get_populated_pcp_list(struct zone *zone,
 	if (list_empty(list)) {
 		int batch = READ_ONCE(pcp->batch);
 		int alloced;
+
+		trace_android_vh_rmqueue_bulk_bypass(order, pcp, migratetype, list);
+		if (!list_empty(list))
+			return list;
 
 		/*
 		 * Scale batch relative to order if batch implies
@@ -3438,6 +3543,10 @@ static bool free_unref_page_prepare(struct page *page, unsigned long pfn,
 {
 	int migratetype;
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	CHP_BUG_ON(PageCont(page));
+	CHP_BUG_ON(PageContRefill(page));
+#endif
 	if (!free_pcp_prepare(page, order))
 		return false;
 
@@ -3517,8 +3626,18 @@ void free_unref_page(struct page *page, unsigned int order)
 	unsigned long pfn = page_to_pfn(page);
 	int migratetype;
 	bool pcp_skip_cma_pages = false;
+	bool skip_free_unref_page = false;
 
 	if (!free_unref_page_prepare(page, pfn, order))
+		return;
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	CHP_BUG_ON(PageCont(page));
+	CHP_BUG_ON(PageContRefill(page));
+#endif
+	migratetype = get_pcppage_migratetype(page);
+	trace_android_vh_free_unref_page_bypass(page, order, migratetype, &skip_free_unref_page);
+	if (skip_free_unref_page)
 		return;
 
 	/*
@@ -3530,8 +3649,11 @@ void free_unref_page(struct page *page, unsigned int order)
 	 */
 	migratetype = get_pcppage_migratetype(page);
 	if (unlikely(migratetype >= MIGRATE_PCPTYPES)) {
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
+		/*We use this hook in cont_pte_hugepage.c, when enable CONT_PTE_HUGEPAGE*/
 		trace_android_vh_pcplist_add_cma_pages_bypass(migratetype,
 			&pcp_skip_cma_pages);
+#endif
 		if (unlikely(is_migrate_isolate(migratetype)) ||
 			pcp_skip_cma_pages) {
 			free_one_page(page_zone(page), page, pfn, order, migratetype, FPI_NONE);
@@ -4288,6 +4410,10 @@ try_this_zone:
 		page = rmqueue(ac->preferred_zoneref->zone, zone, order,
 				gfp_mask, alloc_flags, ac->migratetype);
 		if (page) {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (within_cont_pte_cma(page_to_pfn(page)))
+				atomic64_inc(&perf_stat.cma_steal_count);
+#endif
 			prep_new_page(page, order, gfp_mask, alloc_flags);
 
 			/*
@@ -5053,6 +5179,7 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	unsigned int zonelist_iter_cookie;
 	int reserve_flags;
 	unsigned long alloc_start = jiffies;
+	bool should_alloc_retry = false;
 	/*
 	 * We also sanity check to catch abuse of atomic reserves being used by
 	 * callers that are not in atomic context.
@@ -5190,6 +5317,11 @@ retry:
 
 	if (page)
 		goto got_pg;
+
+	trace_android_vh_should_alloc_pages_retry(gfp_mask, order, &alloc_flags,
+		ac->migratetype, ac->preferred_zoneref->zone, &page, &should_alloc_retry);
+	if (should_alloc_retry)
+		goto retry;
 
 	/* Try direct reclaim and then allocating */
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
@@ -5396,7 +5528,7 @@ unsigned long __alloc_pages_bulk(gfp_t gfp, int preferred_nid,
 	struct per_cpu_pages *pcp;
 	struct alloc_context ac;
 	gfp_t alloc_gfp;
-	unsigned int alloc_flags = ALLOC_WMARK_LOW;
+	unsigned int alloc_flags = ALLOC_WMARK_MIN;
 	int nr_populated = 0, nr_account = 0;
 
 	/*
@@ -5536,6 +5668,14 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int preferred_nid,
 	gfp_t alloc_gfp; /* The gfp_t that was actually used for allocation */
 	struct alloc_context ac = { };
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (unlikely(order >= MAX_ORDER)) {
+		page = alloc_chp_ext(gfp, &order);
+		if (page)
+			return page;
+	}
+#endif
+
 	/*
 	 * There are several places where we assume that the order value is sane
 	 * so bail out early if the request is out of bound.
@@ -5638,9 +5778,19 @@ EXPORT_SYMBOL(get_zeroed_page);
  */
 void __free_pages(struct page *page, unsigned int order)
 {
+        /* get PageHead before we drop reference */
+        int head = PageHead(page);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/*
+	 * The hugepage alloc by driver is compound page,
+	 * don’t alloc use __free_pages to free it.
+	 */
+	CHP_BUG_ON(PageContExtAlloc(page));
+#endif
+
 	if (put_page_testzero(page))
 		free_the_page(page, order);
-	else if (!PageHead(page))
+	else if (!head)
 		while (order-- > 0)
 			free_the_page(page + (1 << order), order);
 }
@@ -5933,6 +6083,9 @@ long si_mem_available(void)
 	unsigned long reclaimable;
 	struct zone *zone;
 	int lru;
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	int chp_pool_pages;
+#endif
 
 	for (lru = LRU_BASE; lru < NR_LRU_LISTS; lru++)
 		pages[lru] = global_node_page_state(NR_LRU_BASE + lru);
@@ -5963,6 +6116,11 @@ long si_mem_available(void)
 	reclaimable = global_node_page_state_pages(NR_SLAB_RECLAIMABLE_B) +
 		global_node_page_state(NR_KERNEL_MISC_RECLAIMABLE);
 	available += reclaimable - min(reclaimable / 2, wmark_low);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	chp_pool_pages = cont_pte_pool_total_pages();
+	chp_pool_pages -= min(chp_pool_pages / 2, cont_pte_pool_high());
+	available += chp_pool_pages;
+#endif
 
 	if (available < 0)
 		available = 0;
@@ -5972,6 +6130,11 @@ EXPORT_SYMBOL_GPL(si_mem_available);
 
 void si_meminfo(struct sysinfo *val)
 {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (unlikely(handle_chp_ext_cmd(val)))
+		return;
+#endif
+
 	val->totalram = totalram_pages();
 	val->sharedram = global_node_page_state(NR_SHMEM);
 	val->freeram = global_zone_page_state(NR_FREE_PAGES);
@@ -6138,6 +6301,9 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			" shmem_pmdmapped: %lukB"
 			" anon_thp: %lukB"
 #endif
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			" hugepage_pool: %lukB"
+#endif
 			" writeback_tmp:%lukB"
 			" kernel_stack:%lukB"
 #ifdef CONFIG_SHADOW_CALL_STACK
@@ -6159,9 +6325,19 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			K(node_page_state(pgdat, NR_WRITEBACK)),
 			K(node_page_state(pgdat, NR_SHMEM)),
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 			K(node_page_state(pgdat, NR_SHMEM_THPS)),
 			K(node_page_state(pgdat, NR_SHMEM_PMDMAPPED)),
 			K(node_page_state(pgdat, NR_ANON_THPS)),
+#else
+			K(node_page_state(pgdat, NR_SHMEM_THPS) * HPAGE_CONT_PTE_NR),
+			K(node_page_state(pgdat, NR_SHMEM_PMDMAPPED)
+					* HPAGE_CONT_PTE_NR),
+			K(node_page_state(pgdat, NR_ANON_THPS) * HPAGE_CONT_PTE_NR),
+#endif
+#endif
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			K(cont_pte_pool_total_pages()),
 #endif
 			K(node_page_state(pgdat, NR_WRITEBACK_TEMP)),
 			node_page_state(pgdat, NR_KERNEL_STACK_KB),
@@ -7572,6 +7748,7 @@ static unsigned long __init calc_memmap_size(unsigned long spanned_pages,
 }
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 static void pgdat_init_split_queue(struct pglist_data *pgdat)
 {
 	struct deferred_split *ds_queue = &pgdat->deferred_split_queue;
@@ -7580,6 +7757,26 @@ static void pgdat_init_split_queue(struct pglist_data *pgdat)
 	INIT_LIST_HEAD(&ds_queue->split_queue);
 	ds_queue->split_queue_len = 0;
 }
+#endif
+
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && CONFIG_CONT_PTE_HUGEPAGE_LRU
+static void pgdat_init_chp_lruvec(struct pglist_data *pgdat)
+{
+	struct deferred_split *ds_queue = &pgdat->deferred_split_queue;
+	struct chp_lruvec *chp_lruvec = NULL;
+	struct lruvec *lruvec = NULL;
+
+	chp_lruvec = NODE_CHP_LRUVEC(pgdat->node_id);
+	lruvec = &chp_lruvec->lruvec;
+
+	lruvec_init(lruvec);
+	set_bit(LRUVEC_FOR_CHP, &lruvec->flags);
+
+	ds_queue->split_queue_len = (unsigned long)chp_lruvec;
+	chp_lruvec->ds = ds_queue;
+}
+#endif
+
 #else
 static void pgdat_init_split_queue(struct pglist_data *pgdat) {}
 #endif
@@ -7597,7 +7794,19 @@ static void __meminit pgdat_init_internals(struct pglist_data *pgdat)
 {
 	pgdat_resize_init(pgdat);
 
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 	pgdat_init_split_queue(pgdat);
+#else
+
+#if CONFIG_POOL_ASYNC_RECLAIM
+	init_waitqueue_head(&pool_direct_reclaim_wait[pgdat->node_id]);
+#endif
+
+#if CONFIG_CONT_PTE_HUGEPAGE_LRU
+	pgdat_init_chp_lruvec(pgdat);
+#endif
+
+#endif
 	pgdat_init_kcompactd(pgdat);
 
 	init_waitqueue_head(&pgdat->kswapd_wait);
@@ -9294,6 +9503,11 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 
 	trace_android_vh_cma_drain_all_pages_bypass(migratetype,
 						&skip_drain_all_pages);
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (within_cont_pte_cma(start))
+		skip_drain_all_pages = 1;
+#endif
 	if (!skip_drain_all_pages)
 		drain_all_pages(cc.zone);
 
@@ -9477,6 +9691,17 @@ struct page *alloc_contig_pages(unsigned long nr_pages, gfp_t gfp_mask,
 void free_contig_range(unsigned long pfn, unsigned long nr_pages)
 {
 	unsigned long count = 0;
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (nr_pages == HPAGE_CONT_PTE_NR) {
+		struct page *page = pfn_to_page(pfn);
+
+		if (within_cont_pte_cma(pfn) && ContPteHugePageHead(page)) {
+			__free_pages_ok(page, compound_order(page), FPI_NONE);
+			return;
+		}
+	}
+#endif
 
 	for (; nr_pages--; pfn++) {
 		struct page *page = pfn_to_page(pfn);

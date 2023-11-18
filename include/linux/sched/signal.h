@@ -262,6 +262,12 @@ struct signal_struct {
 #define SIGNAL_STOP_MASK (SIGNAL_CLD_MASK | SIGNAL_STOP_STOPPED | \
 			  SIGNAL_STOP_CONTINUED)
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+#define SIGNAL_HUGEPAGE_CRITICAL 0x00000080
+#define SIGNAL_HUGEPAGE_NOT_CRITICAL 0x00000100
+#define SIGNAL_CHP_SPECIAL 0x00000200
+#endif
+
 static inline void signal_set_stop_flags(struct signal_struct *sig,
 					 unsigned int flags)
 {

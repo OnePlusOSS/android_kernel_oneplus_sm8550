@@ -96,7 +96,7 @@ static __always_inline enum lru_list page_lru(struct page *page)
 
 #ifdef CONFIG_LRU_GEN
 
-#ifdef CONFIG_LRU_GEN_ENABLED
+#if defined(CONFIG_LRU_GEN_ENABLED) && !defined(CONFIG_CONT_PTE_HUGEPAGE)
 static inline bool lru_gen_enabled(void)
 {
 	DECLARE_STATIC_KEY_TRUE(lru_gen_caps[NR_LRU_GEN_CAPS]);

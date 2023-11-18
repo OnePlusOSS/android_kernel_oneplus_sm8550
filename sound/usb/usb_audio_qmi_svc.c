@@ -226,7 +226,7 @@ int uaudio_qmi_ctrl_msg(struct usb_device *dev, unsigned int pipe, __u8 request,
 		    __u8 requesttype, __u16 value, __u16 index, void *data,
 		    __u16 size)
 {
-	int err;
+	int err = 0;
 	void *buf = NULL;
 	int timeout;
 
@@ -244,10 +244,14 @@ int uaudio_qmi_ctrl_msg(struct usb_device *dev, unsigned int pipe, __u8 request,
 	else
 		timeout = USB_CTRL_SET_TIMEOUT;
 
-	err = usb_control_msg(dev, pipe, request, requesttype,
-			      value, index, buf, size, timeout);
-
 	if (size > 0) {
+		err = usb_control_msg(dev, pipe, request, requesttype,
+		      value, index, buf, size, timeout);
+		if (err < 0) {
+			dev_err(&dev->dev, "usb_control_msg returned %d\n", err);
+			kfree(buf);
+			return err;
+		}
 		memcpy(data, buf, size);
 		kfree(buf);
 	}

@@ -579,6 +579,9 @@ struct dwc3_msm {
 	int			refcnt_dp_usb;
 	enum dp_lane		dp_state;
 	bool			dynamic_disable;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	bool			force_disconnect;
+#endif
 };
 
 #define USB_HSPHY_3P3_VOL_MIN		3050000 /* uV */
@@ -6410,6 +6413,12 @@ static int dwc3_otg_start_peripheral(struct dwc3_msm *mdwc, int on)
 		msm_dwc3_perf_vote_update(mdwc, true);
 		schedule_delayed_work(&mdwc->perf_vote_work,
 				msecs_to_jiffies(1000 * PM_QOS_SAMPLE_SEC));
+#ifdef OPLUS_FEATURE_CHG_BASIC
+		if (mdwc->force_disconnect) {
+			usb_gadget_connect(dwc->gadget);
+			mdwc->force_disconnect = false;
+		}
+#endif
 	} else {
 		dev_dbg(mdwc->dev, "%s: turn off gadget\n", __func__);
 		cancel_delayed_work_sync(&mdwc->perf_vote_work);
@@ -6436,13 +6445,29 @@ static int dwc3_otg_start_peripheral(struct dwc3_msm *mdwc, int on)
 		 * or pullup disable), and retry suspend again.
 		 */
 		ret = pm_runtime_put_sync(&mdwc->dwc3->dev);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+		if (ret < 0) {
+#else
 		if (ret == -EBUSY) {
+#endif
 			while (--timeout && dwc->connected)
 				msleep(20);
 			dbg_event(0xFF, "StopGdgt connected", dwc->connected);
 			pm_runtime_suspend(&mdwc->dwc3->dev);
 		}
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+		if ((dwc->connected) && (timeout == 0)) {
+			usb_gadget_disconnect(dwc->gadget);
+			timeout = 10;
+			while (timeout && !pm_runtime_suspended(dwc->dev)) {
+				msleep(20);
+				timeout--;
+			}
+			mdwc->force_disconnect = true;
+			dbg_event(0xFF, "Force Disconnect", mdwc->force_disconnect);
+		}
+#endif
 		/* wait for LPM, to ensure h/w is reset after stop_peripheral */
 		set_bit(WAIT_FOR_LPM, &mdwc->inputs);
 	}

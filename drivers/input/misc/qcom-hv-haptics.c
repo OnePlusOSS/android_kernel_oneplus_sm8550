@@ -6951,7 +6951,6 @@ static ssize_t haptic_test_duration_write(struct file *filp,
 	}
 	/*	critical_log = atoi(write_data);*/
 	/*	sprintf(critical_log,"%d",(void *)write_data);*/
-	write_data[len] = '\0';
 	if (write_data[len - 1] == '\n') {
 		write_data[len - 1] = '\0';
 	}
@@ -7012,7 +7011,6 @@ static ssize_t haptic_test_times_write(struct file *filp,
 	}
 	/*	critical_log = atoi(write_data);*/
 	/*	sprintf(critical_log,"%d",(void *)write_data);*/
-	write_data[len] = '\0';
 	if (write_data[len - 1] == '\n') {
 		write_data[len - 1] = '\0';
 	}

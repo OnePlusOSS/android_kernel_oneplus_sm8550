@@ -49,6 +49,8 @@ static const struct segdist_code {
 	{768,	2,	0xc02,	 0x001},
 };
 
+
+
 /**
  * slim_stream_allocate() - Allocate a new SLIMbus Stream
  * @dev:Slim device to be associated with

@@ -644,6 +644,55 @@ static unsigned long count_mm_mlocked_page_nr(struct mm_struct *mm,
 	return count >> PAGE_SHIFT;
 }
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+static inline int mlock_align_chp(unsigned long *startp, size_t *lenp)
+{
+		struct vm_area_struct *vma;
+		unsigned long end;
+		unsigned long start;
+		size_t len;
+
+		start = *startp;
+		len = *lenp;
+
+		end = start + len;
+		if (end < start) {
+			mmap_write_unlock(current->mm);
+			return -EINVAL;
+		}
+
+		if (end == start)
+			return 0;
+
+		/* get origin first vma */
+		vma = find_vma(current->mm, start);
+		if (vma && vma->vm_start <= start && vma_is_chp_anonymous(vma)) {
+			pr_debug("@ FIXME %s:%d comm:%s pid:%d vma:%lx(%lx-%lx)  ORIGIN-> mlock:(%lx, %lx), len:%ld(%lx)  @\n",
+					__func__, __LINE__, current->comm, current->pid, vma, vma->vm_start, vma->vm_end, start, end, len, len);
+
+			/* Align the start to 64k */
+			start = max(start & HPAGE_CONT_PTE_MASK, vma->vm_start);
+			*startp = start;
+			pr_debug("@ FIXME %s:%d comm:%s pid:%d vma:%lx(%lx-%lx)  CURRENT(align start)-> mlock:(%lx, %lx), len:%ld(%lx) @\n",
+					__func__, __LINE__, current->comm, current->pid, vma, vma->vm_start, vma->vm_end,  start, end, len, len);
+		}
+
+		/* get origin last vma */
+		vma = find_vma(current->mm, end - 1);
+		if (vma && vma->vm_start <= end && vma_is_chp_anonymous(vma)) {
+			/* Align the len/end to 64k */
+			end = ALIGN(end, HPAGE_CONT_PTE_SIZE);
+			end = min(end, vma->vm_end);
+			len = end - start;
+			*lenp = len;
+			pr_debug("@ FIXME %s:%d comm:%s pid:%d vma:%lx(%lx-%lx)  CURRENT(align len)-> mlock:(%lx, %lx), len:%ld(%lx) @\n",
+					__func__, __LINE__, current->comm, current->pid, vma, vma->vm_start, vma->vm_end,  start, end, len, len);
+		}
+
+		return 0;
+}
+#endif
+
 static __must_check int do_mlock(unsigned long start, size_t len, vm_flags_t flags)
 {
 	unsigned long locked;
@@ -664,6 +713,14 @@ static __must_check int do_mlock(unsigned long start, size_t len, vm_flags_t fla
 
 	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	error = mlock_align_chp(&start, &len);
+	if (error)
+		return error;
+	error = -ENOMEM;
+	locked = len >> PAGE_SHIFT;
+#endif
 
 	locked += current->mm->locked_vm;
 	if ((locked > lock_limit) && (!capable(CAP_IPC_LOCK))) {
@@ -720,6 +777,13 @@ SYSCALL_DEFINE2(munlock, unsigned long, start, size_t, len)
 
 	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	ret = mlock_align_chp(&start, &len);
+	if (ret)
+		return ret;
+#endif
+
 	ret = apply_vma_lock_flags(start, len, 0);
 	mmap_write_unlock(current->mm);
 

@@ -1277,7 +1277,6 @@ void add_to_oom_reaper(struct task_struct *p)
 	p = find_lock_task_mm(p);
 	if (!p)
 		return;
-
 	if (task_will_free_mem(p)) {
 		__mark_oom_victim(p);
 		if (!test_and_set_bit(MMF_OOM_REAP_QUEUED,

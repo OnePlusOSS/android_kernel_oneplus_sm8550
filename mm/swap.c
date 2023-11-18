@@ -108,6 +108,9 @@ static void __put_compound_page(struct page *page)
 	 */
 	if (!PageHuge(page))
 		__page_cache_release(page);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	CHP_BUG_ON(PageCont(page) && !PageError(page) && !PageUptodate(page));
+#endif
 	destroy_compound_page(page);
 }
 
@@ -219,6 +222,24 @@ static bool pagevec_add_and_need_flush(struct pagevec *pvec, struct page *page)
 {
 	bool ret = false;
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/*
+	 * FIXME: Detect the tail page of a
+	 * cont-pte hugepage is added to an lru
+	 */
+	if ((PageCont(page) && !PageHead(page)) || PageContRefill(page)) {
+		pr_err("@%s:%d comm:%s pid:%d page:%lx PageCont:%d PageHead:%d PageAnon:%d PageSwapBacked:%d PageContRefill:%d "
+				"flags:%lx lru.next:%lx lru.prev:%lx compound_head:%lx pfn:%lx head_pfn:%lx within_cont_pte_cma:%d @\n",
+				__func__, __LINE__, current->comm, current->pid,
+				(unsigned long)page, PageCont(page), PageHead(page), PageAnon(page),
+				PageSwapBacked(page), PageContRefill(page), page->flags, (unsigned long)page->lru.next,
+				(unsigned long)page->lru.prev, (unsigned long)compound_head(page),
+				page_to_pfn(page), page_to_pfn(compound_head(page)), within_cont_pte_cma(page_to_pfn(page)));
+		dump_page(page, "FIXME: the tail page of a cont-pte hugepage is added to an lru!\n");
+		CHP_BUG_ON(1);
+	}
+#endif
+
 	if (!pagevec_add(pvec, page) || PageCompound(page) ||
 			lru_cache_disabled())
 		ret = true;
@@ -291,8 +312,22 @@ void lru_note_cost(struct lruvec *lruvec, bool file, unsigned int nr_pages)
 
 void lru_note_cost_page(struct page *page)
 {
+	/* NOTE: The cont_pte_nr_pages is used to support
+	 * cont-pte hugepages with intermediate states! */
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+#if CONFIG_CONT_PTE_HUGEPAGE_LRU
+	if (ContPteCMAHugePageHead(page))
+		lru_note_cost(mem_cgroup_chp_page_lruvec(page, page_pgdat(page)),
+				page_is_file_lru(page), cont_pte_nr_pages(page));
+	else
+#endif
+
+		lru_note_cost(mem_cgroup_page_lruvec(page),
+		      page_is_file_lru(page), cont_pte_nr_pages(page));
+#else
 	lru_note_cost(mem_cgroup_page_lruvec(page),
 		      page_is_file_lru(page), thp_nr_pages(page));
+#endif
 }
 
 static void __activate_page(struct page *page, struct lruvec *lruvec)

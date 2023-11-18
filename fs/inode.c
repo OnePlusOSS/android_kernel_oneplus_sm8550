@@ -207,6 +207,10 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	if (unlikely(security_inode_alloc(inode)))
 		return -ENOMEM;
 	this_cpu_inc(nr_inodes);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/* for cont-pte file hugepage */
+	inode->may_cont_pte = 0;
+#endif
 
 	return 0;
 }

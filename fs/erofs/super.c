@@ -30,7 +30,16 @@ void _erofs_err(struct super_block *sb, const char *function,
 	vaf.fmt = fmt;
 	vaf.va = &args;
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+#if EROFS_IOERROR_INJECTION
+	pr_err_ratelimited("(device %s): %s: %pV", sb->s_id, function, &vaf);
+#else
 	pr_err("(device %s): %s: %pV", sb->s_id, function, &vaf);
+#endif
+#else
+	pr_err("(device %s): %s: %pV", sb->s_id, function, &vaf);
+#endif /* CONFIG_CONT_PTE_HUGEPAGE */
+
 	va_end(args);
 }
 

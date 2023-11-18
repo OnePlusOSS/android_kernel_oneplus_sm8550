@@ -509,6 +509,18 @@ static struct page *follow_page_pte(struct vm_area_struct *vma,
 	if (WARN_ON_ONCE((flags & (FOLL_PIN | FOLL_GET)) ==
 			 (FOLL_PIN | FOLL_GET)))
 		return ERR_PTR(-EINVAL);
+
+	/*
+	 * Considering PTE level hugetlb, like continuous-PTE hugetlb on
+	 * ARM64 architecture.
+	 */
+	if (is_vm_hugetlb_page(vma)) {
+		page = follow_huge_pmd_pte(vma, address, flags);
+		if (page)
+			return page;
+		return no_page_table(vma, flags);
+	}
+
 retry:
 	if (unlikely(pmd_bad(*pmd)))
 		return no_page_table(vma, flags);
@@ -598,8 +610,15 @@ retry:
 		mark_page_accessed(page);
 	}
 	if ((flags & FOLL_MLOCK) && (vma->vm_flags & VM_LOCKED)) {
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 		/* Do not mlock pte-mapped THP */
 		if (PageTransCompound(page))
+#else
+		if (PageTransCompound(page) &&
+		    (!ContPteHugePageHead(page) ||
+		     PageDoubleMap(compound_head(page)) ||
+		     PageAnon(page)))
+#endif
 			goto out;
 
 		/*
@@ -652,7 +671,7 @@ static struct page *follow_pmd_mask(struct vm_area_struct *vma,
 	if (pmd_none(pmdval))
 		return no_page_table(vma, flags);
 	if (pmd_huge(pmdval) && is_vm_hugetlb_page(vma)) {
-		page = follow_huge_pmd(mm, address, pmd, flags);
+		page = follow_huge_pmd_pte(vma, address, flags);
 		if (page)
 			return page;
 		return no_page_table(vma, flags);
@@ -1856,7 +1875,11 @@ static long check_and_migrate_movable_pages(unsigned long nr_pages,
 
 	for (i = 0; i < nr_pages; i++) {
 		head = compound_head(pages[i]);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (head == prev_head || ContPteHugePage(head))
+#else
 		if (head == prev_head)
+#endif
 			continue;
 		prev_head = head;
 		/*
@@ -1865,7 +1888,7 @@ static long check_and_migrate_movable_pages(unsigned long nr_pages,
 		 */
 		if (!is_pinnable_page(head)) {
 			if (PageHuge(head)) {
-				if (!isolate_huge_page(head, &movable_page_list))
+				if (isolate_hugetlb(head, &movable_page_list))
 					isolation_error_count++;
 			} else {
 				if (!PageLRU(head) && drain_allow) {
@@ -2709,7 +2732,7 @@ static int gup_pud_range(p4d_t *p4dp, p4d_t p4d, unsigned long addr, unsigned lo
 		next = pud_addr_end(addr, end);
 		if (unlikely(!pud_present(pud)))
 			return 0;
-		if (unlikely(pud_huge(pud))) {
+		if (unlikely(pud_huge(pud) || pud_devmap(pud))) {
 			if (!gup_huge_pud(pud, pudp, addr, next, flags,
 					  pages, nr))
 				return 0;

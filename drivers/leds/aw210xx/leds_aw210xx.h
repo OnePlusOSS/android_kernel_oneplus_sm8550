@@ -410,6 +410,10 @@ struct aw210xx {
 	bool esd_flag;
 	struct delayed_work   aw210_led_work;
 	struct workqueue_struct *aw210_led_wq;
+	int rgb_is_ok;
+	int dev_resume_time;
+	bool bus_ready;
+	wait_queue_head_t wait;
 };
 
 #endif
