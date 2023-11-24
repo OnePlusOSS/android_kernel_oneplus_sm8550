@@ -50,7 +50,6 @@
 #include "arm-smmu.h"
 #include "../../iommu-logger.h"
 #include "../../qcom-dma-iommu-generic.h"
-#include "../../qcom-io-pgtable.h"
 #include "../../qcom-io-pgtable-alloc.h"
 #include <linux/qcom-iommu-util.h>
 
@@ -3449,13 +3448,10 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	if (err)
 		return err;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res)
-		return -EINVAL;
-	ioaddr = res->start;
-	smmu->base = devm_ioremap_resource(dev, res);
+	smmu->base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(smmu->base))
 		return PTR_ERR(smmu->base);
+	ioaddr = res->start;
 	/*
 	 * The resource size should effectively match the value of SMMU_TOP;
 	 * stash that temporarily until we know PAGESIZE to validate it with.
@@ -3774,9 +3770,29 @@ static int __maybe_unused arm_smmu_pm_freeze_late(struct device *dev)
 	return 0;
 }
 
+static int arm_smmu_pm_prepare(struct device *dev)
+{
+	if (!of_device_is_compatible(dev->of_node, "qcom,adreno-smmu"))
+		return 0;
+
+	/*
+	 * In case of GFX smmu, race between rpm_suspend and system suspend could
+	 * cause a deadlock where cx vote is never put down causing timeout. So,
+	 * abort system suspend here if dev->power.usage_count is 1 as this indicates
+	 * rpm_suspend is in progress and prepare is the one incrementing this counter.
+	 * Now rpm_suspend can continue and put down cx vote. System suspend will resume
+	 * later and complete.
+	 */
+	if (pm_runtime_suspended(dev))
+		return 0;
+
+	return (atomic_read(&dev->power.usage_count) == 1) ? -EINPROGRESS : 0;
+}
+
 static const struct dev_pm_ops arm_smmu_pm_ops = {
 	SET_RUNTIME_PM_OPS(arm_smmu_runtime_suspend,
 			   arm_smmu_runtime_resume, NULL)
+	.prepare = arm_smmu_pm_prepare,
 	.suspend  = arm_smmu_pm_suspend,
 	.resume   = arm_smmu_pm_resume,
 	.thaw_early = arm_smmu_pm_restore_early,

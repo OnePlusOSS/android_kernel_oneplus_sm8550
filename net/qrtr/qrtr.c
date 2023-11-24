@@ -1289,6 +1289,39 @@ static void qrtr_hello_work(struct kthread_work *work)
 	qrtr_port_put(ctrl);
 }
 
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+#include <linux/of.h>
+static char * qrtr_get_device_node_name(struct qrtr_endpoint *ep)
+{
+	char prefix_str[] = "qrtr_ws";
+	char middle_str[] = "_";
+	const char *node_name;
+	char *target_name = NULL;
+	int  str_len = 0;
+
+	if(ep->dev==NULL) {
+		pr_info("%s %d : ep->dev is null\n", __func__, __LINE__);
+		dump_stack();
+		return NULL;
+	}
+	if(ep->dev->of_node!=NULL) {
+		node_name = kbasename(ep->dev->of_node->full_name);
+	} else if(ep->dev->kobj.name!=NULL) {
+		node_name = ep->dev->kobj.name;
+	} else {
+		return NULL;
+	}
+	str_len = strlen(prefix_str) + strlen(middle_str)  + strlen(node_name);
+	target_name = (char *)kzalloc(str_len+1, GFP_KERNEL);
+	if(!target_name) {
+		pr_info("%s %d : kzalloc fail\n", __func__, __LINE__);
+		return NULL;
+	}
+	snprintf(target_name, str_len, "%s%s%s", prefix_str, middle_str, node_name);
+	return target_name;
+}
+#endif
+
 /**
  * qrtr_endpoint_register() - register a new endpoint
  * @ep: endpoint to register
@@ -1306,6 +1339,9 @@ int qrtr_endpoint_register(struct qrtr_endpoint *ep, unsigned int net_id,
 	size_t size;
 	struct qrtr_node *node;
 	struct sched_param param = {.sched_priority = 1};
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	char *dev_name = NULL;
+#endif
 
 	if (!ep || !ep->xmit)
 		return -EINVAL;
@@ -1355,7 +1391,16 @@ int qrtr_endpoint_register(struct qrtr_endpoint *ep, unsigned int net_id,
 	up_write(&qrtr_epts_lock);
 	ep->node = node;
 
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	dev_name = qrtr_get_device_node_name(ep);
+	if(!dev_name) {
+		dev_name = "qrtr_ws_unknown";
+	}
+	node->ws = wakeup_source_register(NULL, dev_name);
+	pr_info("%s %d : qrtr wakeup source name is %s\n", __func__, __LINE__, dev_name);
+#else
 	node->ws = wakeup_source_register(NULL, "qrtr_ws");
+#endif
 
 	kthread_queue_work(&node->kworker, &node->say_hello);
 	return 0;

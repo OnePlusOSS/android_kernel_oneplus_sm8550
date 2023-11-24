@@ -80,6 +80,7 @@
 /* MTK generation one iommu HW only support 4K size mapping */
 #define MT2701_IOMMU_PAGE_SHIFT			12
 #define MT2701_IOMMU_PAGE_SIZE			(1UL << MT2701_IOMMU_PAGE_SHIFT)
+#define MT2701_LARB_NR_MAX			3
 
 /*
  * MTK m4u support 4GB iova address space, and only support 4K page
@@ -457,6 +458,9 @@ static struct iommu_device *mtk_iommu_probe_device(struct device *dev)
 
 	/* Link the consumer device with the smi-larb device(supplier) */
 	larbid = mt2701_m4u_to_larb(fwspec->ids[0]);
+	if (larbid >= MT2701_LARB_NR_MAX)
+		return ERR_PTR(-EINVAL);
+
 	for (idx = 1; idx < fwspec->num_ids; idx++) {
 		larbidx = mt2701_m4u_to_larb(fwspec->ids[idx]);
 		if (larbid != larbidx) {
@@ -467,6 +471,9 @@ static struct iommu_device *mtk_iommu_probe_device(struct device *dev)
 	}
 
 	larbdev = data->larb_imu[larbid].dev;
+	if (!larbdev)
+		return ERR_PTR(-EINVAL);
+
 	link = device_link_add(dev, larbdev,
 			       DL_FLAG_PM_RUNTIME | DL_FLAG_STATELESS);
 	if (!link)
@@ -648,7 +655,7 @@ static int mtk_iommu_probe(struct platform_device *pdev)
 	ret = iommu_device_sysfs_add(&data->iommu, &pdev->dev, NULL,
 				     dev_name(&pdev->dev));
 	if (ret)
-		return ret;
+		goto out_clk_unprepare;
 
 	ret = iommu_device_register(&data->iommu, &mtk_iommu_ops, dev);
 	if (ret)
@@ -671,6 +678,8 @@ out_dev_unreg:
 	iommu_device_unregister(&data->iommu);
 out_sysfs_remove:
 	iommu_device_sysfs_remove(&data->iommu);
+out_clk_unprepare:
+	clk_disable_unprepare(data->bclk);
 	return ret;
 }
 

@@ -920,7 +920,7 @@ config ANON_VMA_NAME
 config LRU_GEN
 	bool "Multi-Gen LRU"
 	depends on MMU
-	# the following options can use up the spare bits in page flags
+	# make sure page->flags has enough spare bits
 	depends on !MAXSMP && (64BIT || !SPARSEMEM || SPARSEMEM_VMEMMAP)
 	help
 	  A high performance LRU implementation to overcommit memory. See
@@ -943,6 +943,7 @@ config LRU_GEN_STATS
 # }
 
 source "mm/damon/Kconfig"
+source "mm/oplus_mm/Kconfig"
 
 config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
        def_bool n
@@ -950,7 +951,7 @@ config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
 config SPECULATIVE_PAGE_FAULT
 	bool "Speculative page faults"
 	default y
-	depends on ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT && MMU && SMP
+	depends on ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT && MMU && SMP && !NUMA
 	help
 	  Try to handle user space page faults without holding the mmap lock.
 
@@ -965,5 +966,34 @@ config SPECULATIVE_PAGE_FAULT
 	  If the check fails due to a concurrent writer, or due to hitting
 	  an unsupported case, the fault handler falls back to classical
 	  processing using the mmap read lock.
+
+config CONT_PTE_HUGEPAGE
+	bool "Cont Pte Hugepage support"
+	default y
+	depends on ARM64 && TRANSPARENT_HUGEPAGE
+	help
+	  Try to THP-like Hugepages based on ARM64 cont-pte.
+
+config CONT_PTE_HUGEPAGE_ON_EXT4
+	bool "Cont Pte Hugepage support on EXT4"
+	default n
+	depends on CONT_PTE_HUGEPAGE
+	help
+	  Try to THP-like Hugepages based on ARM64 cont-pte on ext4
+
+config CONT_PTE_HUGEPAGE_ON_QEMU
+	bool "Cont Pte Hugepage support on QEMU"
+	default n
+	depends on CONT_PTE_HUGEPAGE
+	help
+	  QEMU debugging of ContPte hugepage
+
+config CONT_PTE_HUGEPAGE_64K_ZRAM
+	bool "Cont Pte Hugepage support 64K ZRAM"
+	default y
+	depends on CONT_PTE_HUGEPAGE
+
+	help
+	  Cont Pte Hugepage support 64K ZRAM
 
 endmenu

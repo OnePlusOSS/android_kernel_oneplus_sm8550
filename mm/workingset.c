@@ -217,40 +217,32 @@ static void unpack_shadow(void *shadow, int *memcgidp, pg_data_t **pgdat,
 
 #ifdef CONFIG_LRU_GEN
 
-static int page_lru_refs(struct page *page)
-{
-	unsigned long flags = READ_ONCE(page->flags);
-
-	BUILD_BUG_ON(LRU_GEN_WIDTH + LRU_REFS_WIDTH > BITS_PER_LONG - EVICTION_SHIFT);
-
-	/* see the comment on MAX_NR_TIERS */
-	return flags & BIT(PG_workingset) ? (flags & LRU_REFS_MASK) >> LRU_REFS_PGOFF : 0;
-}
-
 static void *lru_gen_eviction(struct page *page)
 {
-	int hist, tier;
+	int hist;
 	unsigned long token;
 	unsigned long min_seq;
 	struct lruvec *lruvec;
 	struct lru_gen_struct *lrugen;
 	int type = page_is_file_lru(page);
-	int refs = page_lru_refs(page);
 	int delta = thp_nr_pages(page);
-	bool workingset = PageWorkingset(page);
+	int refs = page_lru_refs(page);
+	int tier = lru_tier_from_refs(refs);
 	struct mem_cgroup *memcg = page_memcg(page);
 	struct pglist_data *pgdat = page_pgdat(page);
 
+	BUILD_BUG_ON(LRU_GEN_WIDTH + LRU_REFS_WIDTH > BITS_PER_LONG - EVICTION_SHIFT);
+
+	/* FIXME: chp doesn't care */
 	lruvec = mem_cgroup_lruvec(memcg, pgdat);
 	lrugen = &lruvec->lrugen;
 	min_seq = READ_ONCE(lrugen->min_seq[type]);
-	token = (min_seq << LRU_REFS_WIDTH) | refs;
+	token = (min_seq << LRU_REFS_WIDTH) | max(refs - 1, 0);
 
 	hist = lru_hist_from_seq(min_seq);
-	tier = lru_tier_from_refs(refs + workingset);
 	atomic_long_add(delta, &lrugen->evicted[hist][type][tier]);
 
-	return pack_shadow(mem_cgroup_id(memcg), pgdat, token, workingset);
+	return pack_shadow(mem_cgroup_id(memcg), pgdat, token, refs);
 }
 
 static void lru_gen_refault(struct page *page, void *shadow)
@@ -269,27 +261,28 @@ static void lru_gen_refault(struct page *page, void *shadow)
 
 	unpack_shadow(shadow, &memcg_id, &pgdat, &token, &workingset);
 
-	refs = token & (BIT(LRU_REFS_WIDTH) - 1);
-	if (refs && !workingset)
-		return;
-
-	if (page_pgdat(page) != pgdat)
+	if (pgdat != page_pgdat(page))
 		return;
 
 	rcu_read_lock();
+
 	memcg = page_memcg_rcu(page);
-	if (mem_cgroup_id(memcg) != memcg_id)
+	if (memcg_id != mem_cgroup_id(memcg))
 		goto unlock;
 
-	token >>= LRU_REFS_WIDTH;
+	/* FIXME: chp doesn't care */
 	lruvec = mem_cgroup_lruvec(memcg, pgdat);
 	lrugen = &lruvec->lrugen;
+
 	min_seq = READ_ONCE(lrugen->min_seq[type]);
-	if (token != (min_seq & (EVICTION_MASK >> LRU_REFS_WIDTH)))
+	if ((token >> LRU_REFS_WIDTH) != (min_seq & (EVICTION_MASK >> LRU_REFS_WIDTH)))
 		goto unlock;
 
 	hist = lru_hist_from_seq(min_seq);
-	tier = lru_tier_from_refs(refs + workingset);
+	/* see the comment in page_lru_refs() */
+	refs = (token & (BIT(LRU_REFS_WIDTH) - 1)) + workingset;
+	tier = lru_tier_from_refs(refs);
+
 	atomic_long_add(delta, &lrugen->refaulted[hist][type][tier]);
 	mod_lruvec_state(lruvec, WORKINGSET_REFAULT_BASE + type, delta);
 
@@ -297,10 +290,10 @@ static void lru_gen_refault(struct page *page, void *shadow)
 	 * Count the following two cases as stalls:
 	 * 1. For pages accessed through page tables, hotter pages pushed out
 	 *    hot pages which refaulted immediately.
-	 * 2. For pages accessed through file descriptors, numbers of accesses
-	 *    might have been beyond the limit.
+	 * 2. For pages accessed multiple times through file descriptors,
+	 *    numbers of accesses might have been out of the range.
 	 */
-	if (lru_gen_in_fault() || refs + workingset == BIT(LRU_REFS_WIDTH)) {
+	if (lru_gen_in_fault() || refs == BIT(LRU_REFS_WIDTH)) {
 		SetPageWorkingset(page);
 		mod_lruvec_state(lruvec, WORKINGSET_RESTORE_BASE + type, delta);
 	}
@@ -308,7 +301,7 @@ unlock:
 	rcu_read_unlock();
 }
 
-#else
+#else /* !CONFIG_LRU_GEN */
 
 static void *lru_gen_eviction(struct page *page)
 {
@@ -372,7 +365,12 @@ void *workingset_eviction(struct page *page, struct mem_cgroup *target_memcg)
 	if (lru_gen_enabled())
 		return lru_gen_eviction(page);
 
-	lruvec = mem_cgroup_lruvec(target_memcg, pgdat);
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && CONFIG_CONT_PTE_HUGEPAGE_LRU
+	if (ContPteCMAHugePageHead(page))
+		lruvec = mem_cgroup_chp_lruvec(target_memcg, pgdat);
+	else
+#endif
+		lruvec = mem_cgroup_lruvec(target_memcg, pgdat);
 	/* XXX: target_memcg can be NULL, go through lruvec */
 	memcgid = mem_cgroup_id(lruvec_memcg(lruvec));
 	eviction = atomic_long_read(&lruvec->nonresident_age);
@@ -433,7 +431,12 @@ void workingset_refault(struct page *page, void *shadow)
 	eviction_memcg = mem_cgroup_from_id(memcgid);
 	if (!mem_cgroup_disabled() && !eviction_memcg)
 		goto out;
-	eviction_lruvec = mem_cgroup_lruvec(eviction_memcg, pgdat);
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && CONFIG_CONT_PTE_HUGEPAGE_LRU
+	if (ContPteCMAHugePageHead(page))
+		eviction_lruvec = mem_cgroup_chp_lruvec(eviction_memcg, pgdat);
+	else
+#endif
+		eviction_lruvec = mem_cgroup_lruvec(eviction_memcg, pgdat);
 	refault = atomic_long_read(&eviction_lruvec->nonresident_age);
 
 	/*
@@ -463,7 +466,12 @@ void workingset_refault(struct page *page, void *shadow)
 	 * is actually experiencing the refault event.
 	 */
 	memcg = page_memcg(page);
-	lruvec = mem_cgroup_lruvec(memcg, pgdat);
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && CONFIG_CONT_PTE_HUGEPAGE_LRU
+	if (ContPteCMAHugePageHead(page))
+		lruvec = mem_cgroup_chp_lruvec(memcg, pgdat);
+	else
+#endif
+		lruvec = mem_cgroup_lruvec(memcg, pgdat);
 
 	inc_lruvec_state(lruvec, WORKINGSET_REFAULT_BASE + file);
 
@@ -492,7 +500,15 @@ void workingset_refault(struct page *page, void *shadow)
 		goto out;
 
 	SetPageActive(page);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/*
+	 * NOTE: The cont_pte_nr_pages is used to support
+	 * cont-pte hugepages with intermediate states!
+	 */
+	workingset_age_nonresident(lruvec, cont_pte_nr_pages(page));
+#else
 	workingset_age_nonresident(lruvec, thp_nr_pages(page));
+#endif
 	inc_lruvec_state(lruvec, WORKINGSET_ACTIVATE_BASE + file);
 
 	/* Page was active prior to eviction */
@@ -526,7 +542,12 @@ void workingset_activation(struct page *page)
 	memcg = page_memcg_rcu(page);
 	if (!mem_cgroup_disabled() && !memcg)
 		goto out;
-	lruvec = mem_cgroup_page_lruvec(page);
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && CONFIG_CONT_PTE_HUGEPAGE_LRU
+	if (ContPteCMAHugePageHead(page))
+		lruvec = mem_cgroup_chp_page_lruvec(page, page_pgdat(page));
+	else
+#endif
+		lruvec = mem_cgroup_page_lruvec(page);
 	workingset_age_nonresident(lruvec, thp_nr_pages(page));
 out:
 	rcu_read_unlock();
@@ -609,6 +630,7 @@ static unsigned long count_shadow_nodes(struct shrinker *shrinker,
 		struct lruvec *lruvec;
 		int i;
 
+		/* FIXME: chp lruvec! */
 		lruvec = mem_cgroup_lruvec(sc->memcg, NODE_DATA(sc->nid));
 		for (pages = 0, i = 0; i < NR_LRU_LISTS; i++)
 			pages += lruvec_page_state_local(lruvec,

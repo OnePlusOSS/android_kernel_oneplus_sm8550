@@ -25,6 +25,8 @@
 #include <linux/interrupt.h>
 #include <linux/of.h>
 #include <linux/reset.h>
+#include <linux/mmc/sdio.h>
+#include <linux/mmc/host.h>
 #include <linux/clk/qcom.h>
 #include <linux/nvmem-consumer.h>
 #include <linux/ipc_logging.h>
@@ -4152,6 +4154,7 @@ static const struct sdhci_msm_variant_info sdm845_sdhci_var = {
 static const struct of_device_id sdhci_msm_dt_match[] = {
 	{.compatible = "qcom,sdhci-msm-v4", .data = &sdhci_msm_mci_var},
 	{.compatible = "qcom,sdhci-msm-v5", .data = &sdhci_msm_v5_var},
+	{.compatible = "qcom,sdm670-sdhci", .data = &sdm845_sdhci_var},
 	{.compatible = "qcom,sdm845-sdhci", .data = &sdm845_sdhci_var},
 	{},
 };
@@ -4886,6 +4889,127 @@ static void sdhci_msm_set_rumi_bus_mode(struct sdhci_host *host)
 	}
 }
 
+/*add for non standard SDIO slave*/
+#define SDIO_RESET_CCCR_ABORT_WRITE_AGR (0x80000000 | SDIO_CCCR_ABORT << 9 | 0x08)
+#define SDIO_RESET_CCCR_ABORT_READ_AGR (SDIO_CCCR_ABORT << 9)
+
+static inline bool sdhci_data_line_cmd(struct mmc_command *cmd)
+{
+	return cmd->data || cmd->flags & MMC_RSP_BUSY;
+}
+
+static bool sdhci_needs_reset(struct sdhci_host *host, struct mmc_request *mrq)
+{
+	return (!(host->flags & SDHCI_DEVICE_DEAD) &&
+		((mrq->cmd && mrq->cmd->error) ||
+		 (mrq->sbc && mrq->sbc->error) ||
+		 (mrq->data && mrq->data->stop && mrq->data->stop->error) ||
+		 (host->quirks & SDHCI_QUIRK_RESET_AFTER_REQUEST)));
+}
+
+static void sdhci_del_timer(struct sdhci_host *host, struct mmc_request *mrq)
+{
+	if (sdhci_data_line_cmd(mrq->cmd))
+		del_timer(&host->data_timer);
+	else
+		del_timer(&host->timer);
+}
+
+static void __sdhci_finish_mrq(struct sdhci_host *host, struct mmc_request *mrq)
+{
+	int i;
+
+	if (host->cmd && host->cmd->mrq == mrq)
+		host->cmd = NULL;
+
+	if (host->data_cmd && host->data_cmd->mrq == mrq)
+		host->data_cmd = NULL;
+
+	if (host->deferred_cmd && host->deferred_cmd->mrq == mrq)
+		host->deferred_cmd = NULL;
+
+	if (host->data && host->data->mrq == mrq)
+		host->data = NULL;
+
+	if (sdhci_needs_reset(host, mrq))
+		host->pending_reset = true;
+
+	for (i = 0; i < SDHCI_MAX_MRQS; i++) {
+		if (host->mrqs_done[i] == mrq) {
+			WARN_ON(1);
+			return;
+		}
+	}
+
+	for (i = 0; i < SDHCI_MAX_MRQS; i++) {
+		if (!host->mrqs_done[i]) {
+			host->mrqs_done[i] = mrq;
+			break;
+		}
+	}
+
+	WARN_ON(i >= SDHCI_MAX_MRQS);
+
+	sdhci_del_timer(host, mrq);
+
+}
+
+static void sdhci_finish_mrq(struct sdhci_host *host, struct mmc_request *mrq)
+{
+	__sdhci_finish_mrq(host, mrq);
+
+	queue_work(host->complete_wq, &host->complete_work);
+}
+
+static char filter_enable;
+
+static void sdhci_request_explorer(struct mmc_host *mmc, struct mmc_request *mrq)
+{
+	struct sdhci_host *host;
+
+	host = mmc_priv(mmc);
+	if (filter_enable == 1) {
+		if (mrq->cmd->opcode == MMC_GO_IDLE_STATE) {
+			mrq->cmd->error = -ENOMEDIUM;
+			sdhci_finish_mrq(host, mrq);
+			return;
+		}
+
+		if ((mrq->cmd->opcode == SD_IO_RW_DIRECT)  && (mrq->cmd->arg == SDIO_RESET_CCCR_ABORT_WRITE_AGR || mrq->cmd->arg == SDIO_RESET_CCCR_ABORT_READ_AGR)) {
+			mrq->cmd->error = -ENOMEDIUM;
+			sdhci_finish_mrq(host, mrq);
+			return;
+		}
+	}
+	sdhci_request(mmc, mrq);
+
+}
+
+static void sdhci_init_card(struct mmc_host *mmc, struct mmc_card *card)
+{
+	pr_debug("init non standard SDIO card\n");
+	if (card->type == MMC_TYPE_SDIO) {
+		get_device(&card->dev);
+		/* need add dts */
+		card->quirks |= MMC_QUIRK_NONSTD_SDIO;
+		card->cccr.multi_block = 1;
+		card->cccr.wide_bus = 1;
+		card->cis.vendor = 0x1919;
+		card->cis.device = 0x9066;
+		card->cis.blksize = 512;
+		/* host clock */
+		card->cis.max_dtr = 50000000;
+		card->ocr = 0x80;
+	}
+}
+
+static void get_filter_enable(struct mmc_host *host)
+{
+	struct device *dev = host->parent;
+	if (device_property_read_bool(dev, "filter-enable"))
+		filter_enable = 1;
+}
+
 static u32 is_bootdevice_sdhci = SDHCI_BOOT_DEVICE;
 
 static int sdhci_qcom_read_boot_config(struct platform_device *pdev)
@@ -4970,6 +5094,7 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	ret = mmc_of_parse(host->mmc);
 	if (ret)
 		goto pltfm_free;
+	get_filter_enable(host->mmc);
 
 	if (pdev->dev.of_node) {
 		ret = of_alias_get_id(pdev->dev.of_node, "sdhc");
@@ -5256,6 +5381,12 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	sdhci_msm_qos_init(msm_host);
 	/* Initialize sysfs entries */
 	sdhci_msm_init_sysfs_gating_qos(dev);
+
+	if (filter_enable == 1) {
+		host->mmc_host_ops.init_card = sdhci_init_card;
+		host->mmc_host_ops.request = sdhci_request_explorer;
+		host->flags = SDHCI_SIGNALING_180;
+	}
 
 	if (of_property_read_bool(node, "supports-cqe"))
 		ret = sdhci_msm_cqe_add_host(host, pdev);

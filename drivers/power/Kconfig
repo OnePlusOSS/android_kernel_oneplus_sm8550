@@ -1,3 +1,187 @@
 # SPDX-License-Identifier: GPL-2.0-only
 source "drivers/power/reset/Kconfig"
 source "drivers/power/supply/Kconfig"
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+config OPLUS_CHG
+	tristate "OPLUS CHARGER KO module"
+	default m
+	help
+	  Enables support for the oplus charging framework
+
+config OPLUS_SM8550_CHARGER
+	bool "OPLUS SM8550 charger driver"
+	help
+	  Enables support for the sm8350 charging
+
+config OPLUS_SHORT_C_BATT_CHECK
+	bool "OPLUS_SHORT_C_BATT CHECK SUPPORT"
+	default n
+	help
+	  Say Y to include support
+
+config OPLUS_CALL_MODE_SUPPORT
+	bool "OPLUS call mode support"
+	help
+	  Say Y to include support
+
+config OPLUS_SMART_CHARGER_SUPPORT
+	bool "OPLUS smart charger support"
+	help
+	  Say Y to include support
+
+config OPLUS_SHORT_HW_CHECK
+	bool "OPLUS_SHORT_HW CHECK SUPPORT"
+	default n
+	help
+	  Say Y to include support
+
+config OPLUS_CHIP_SOC_NODE
+	bool "OPLUS chip soc node"
+	help
+	  Say Y to include support
+
+config OPLUS_SHORT_IC_CHECK
+	bool "OPLUS_SHORT_IC CHECK SUPPORT"
+	default n
+	help
+	  Say Y to include support
+
+config OPLUS_SHORT_USERSPACE
+	bool "OPLUS batt userspace"
+	help
+	 Say Y to include support
+
+config OPLUS_RTC_DET_SUPPORT
+	bool "OPLUS RTC DET SUPPORT"
+	default n
+	help
+	  Say Y to include support
+
+config OPLUS_CHECK_CHARGERID_VOLT
+	bool "OPLUS CHECK CHARGERID VOLT"
+	default n
+	help
+	  Say Y to include support
+
+config OPLUS_SHIP_MODE_SUPPORT
+	bool "OPLUS_SHIP_MODE_SUPPORT"
+	default n
+	help
+	  Say Y to include support
+
+config OPLUS_CHG_DYNAMIC_CONFIG
+	bool "OPLUS_CHG_DYNAMIC_CONFIG"
+	default n
+	help
+	  Say Y to include support
+
+config DISABLE_OPLUS_FUNCTION
+	bool "DISABLE_OPLUS_FUNCTION for bringup compile"
+	default n
+	help
+	  Say Y to include support
+
+config OPLUS_CHG_DRM_PANEL_NOTIFY
+	bool "OPLUS_CHG_DRM_PANEL_NOTIFY"
+	default n
+	help
+	  Say Y to include support
+
+source "drivers/power/oplus/Kconfig"
+
+menuconfig OPLUS_CHG_V2
+	tristate "OPLUS charging V2 system"
+	default n
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  Say Y here to enable OPLUS charging V2 system support
+
+if OPLUS_CHG_V2
+config OPLUS_SMART_CHARGE
+	bool "smart charge"
+	help
+	  Say Y here to enable smart charge
+
+config OPLUS_ADSP_SM8450_CHARGER
+	bool "SM8450 support"
+	help
+	  Say Y here to declare sm8450 support
+
+menuconfig OPLUS_CHG_VOOCPHY
+	bool "OPLUS charging voocphy"
+	help
+	  Say Y here to enable OPLUS charging system support
+
+config OPLUS_CHG_VOOCPHY_CHGLIB
+	bool "voocphy chglib support"
+	help
+	  Say Y here to declare voocphy chglib support
+
+config OPLUS_CHG_AP_VOOCPHY
+	bool "ap voocphy support"
+	depends on OPLUS_CHG_VOOCPHY_CHGLIB
+	help
+	  Say Y here to declare ap voocphy support
+
+config OPLUS_VOOCPHY_SC8517
+	bool "bidirect cp sc8517 support"
+	depends on OPLUS_CHG_VOOCPHY_CHGLIB && OPLUS_CHG_AP_VOOCPHY
+	help
+	  Say Y here to declare bidirect cp sc8517 support
+
+config OPLUS_UFCS_CLASS
+	tristate "oplus ufcs class"
+	default n
+	help
+	  Say Y or M to enable oplus ufcs class
+
+config OPLUS_UFCS_SC2201
+	bool "enable sc2201 ufcs phy"
+	depends on OPLUS_UFCS_CLASS
+	help
+	  Say Y here to declare sc2201 ufcs phy support
+
+config OPLUS_CHG_IC_DEBUG
+	bool "Virtual IC layer debug interface"
+	help
+	  Say Y here to declare virtual IC layer debug interface
+
+config OPLUS_CHG_MMS_DEBUG
+	bool "Message subscription layer debug interface"
+	help
+	  Say Y here to declare message subscription layer debug interface
+
+config OPLUS_DA9313_CHARGER
+	bool "DA9313 support"
+	help
+	  Say Y here to declare DA9313 support
+
+config OPLUS_MP2762_CHARGER
+	bool "MP2762 support"
+	help
+	  Say Y here to declare MP2762 support
+
+config OPLUS_SGM41512_CHARGER
+	bool "SGM41512 support"
+	help
+	  Say Y here to declare SGM41512 support
+
+config OPLUS_PD_MANAGER_CHARGER
+	bool "PD_MANAGER support"
+	help
+	  Say Y here to declare PD_MANAGER support
+
+config OPLUS_ADSP_CHARGER
+	bool "ADSP support"
+	help
+	  Say Y here to declare ADSP support
+
+config OPLUS_TPS6128XD_CHARGER
+	bool "tps6128xd support"
+	help
+	  Say Y here to declare tps6128xd support
+endif
+
+#endif

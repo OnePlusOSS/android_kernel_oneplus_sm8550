@@ -24,6 +24,9 @@ struct qrtr_endpoint {
 	int (*xmit)(struct qrtr_endpoint *ep, struct sk_buff *skb);
 	/* private: not for endpoint use */
 	struct qrtr_node *node;
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	struct device *dev;
+#endif
 };
 
 /**

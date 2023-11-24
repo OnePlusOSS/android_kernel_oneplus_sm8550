@@ -363,6 +363,10 @@ void __init arm64_memblock_init(void)
 	high_memory = __va(memblock_end_of_DRAM() - 1) + 1;
 }
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+extern void __init cont_pte_cma_reserve(void);
+#endif
+
 void __init bootmem_init(void)
 {
 	unsigned long min, max;
@@ -387,6 +391,10 @@ void __init bootmem_init(void)
 #endif
 
 	dma_pernuma_cma_reserve();
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	cont_pte_cma_reserve();
+#endif
 
 	kvm_hyp_reserve();
 

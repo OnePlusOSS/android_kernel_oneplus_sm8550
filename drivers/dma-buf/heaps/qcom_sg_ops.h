@@ -43,4 +43,13 @@ struct dma_heap_attachment {
 
 extern struct mem_buf_dma_buf_ops qcom_sg_buf_ops;
 
+#ifdef CONFIG_QCOM_DMABUF_HEAPS_SYSTEM
+extern atomic64_t qcom_system_heap_total;
+inline bool is_system_heap_deferred_free(void (*free)(struct qcom_sg_buffer *buffer));
+#else /* CONFIG_QCOM_DMABUF_HEAPS_SYSTEM */
+inline bool is_system_heap_deferred_free(void (*free)(struct qcom_sg_buffer *buffer)) {
+	return false;
+}
+#endif /* CONFIG_QCOM_DMABUF_HEAPS_SYSTEM */
+
 #endif /* _QCOM_SG_OPS_H */

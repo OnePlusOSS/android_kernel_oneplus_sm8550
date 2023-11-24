@@ -7733,7 +7733,7 @@ static int __init pcie_init(void)
 				rc_name, i);
 		scnprintf(rc_name, MAX_RC_NAME_LEN, "pcie%d-dump", i);
 		msm_pcie_dev[i].ipc_log_dump =
-			ipc_log_context_create(PCIE_LOG_PAGES, rc_name, 0);
+			ipc_log_context_create(2*PCIE_LOG_PAGES, rc_name, 0);
 		if (msm_pcie_dev[i].ipc_log_dump == NULL)
 			pr_err("%s: unable to create IPC log context for %s\n",
 				__func__, rc_name);

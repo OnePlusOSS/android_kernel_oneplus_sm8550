@@ -304,7 +304,10 @@ static inline void __check_racy_pte_update(struct mm_struct *mm, pte_t *ptep,
 	 * (ptep_set_access_flags safely changes valid ptes without going
 	 * through an invalid entry).
 	 */
-	VM_WARN_ONCE(!pte_young(pte),
+	 /*
+	  * split cont_pte(remove cont bit in pte ) will not change page young
+	  */
+	VM_WARN_ONCE(!pte_young(pte) && !IS_ENABLED(CONFIG_CONT_PTE_HUGEPAGE),
 		     "%s: racy access flag clearing: 0x%016llx -> 0x%016llx",
 		     __func__, pte_val(old_pte), pte_val(pte));
 	VM_WARN_ONCE(pte_write(old_pte) && !pte_dirty(pte),
@@ -340,6 +343,10 @@ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 
 	__check_racy_pte_update(mm, ptep, pte);
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/* 16 ptes of cont_pte should be set as a whole by copied cset_pte_at */
+	WARN_ON_ONCE((pte_cont(pte) || pte_cont(*ptep)) && current->mm);
+#endif
 	set_pte(ptep, pte);
 }
 
