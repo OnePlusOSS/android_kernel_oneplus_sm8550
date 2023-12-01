@@ -106,6 +106,11 @@
 
 #define EXTRA_INP_SS_DISABLE	BIT(5)
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+#define USB3_PRI_LINK_REGS_LLUCTL(n)	(0xd024 + ((n) * 0x80))
+#define FORCE_GEN1_MASK			BIT(10)
+#endif
+
 /* QSCRATCH_GENERAL_CFG register bit offset */
 #define PIPE_UTMI_CLK_SEL	BIT(0)
 #define PIPE3_PHYSTATUS_SW	BIT(3)
@@ -579,6 +584,9 @@ struct dwc3_msm {
 	int			refcnt_dp_usb;
 	enum dp_lane		dp_state;
 	bool			dynamic_disable;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	bool			force_disconnect;
+#endif
 };
 
 #define USB_HSPHY_3P3_VOL_MIN		3050000 /* uV */
@@ -592,6 +600,15 @@ struct dwc3_msm {
 #define USB_SSPHY_1P8_VOL_MIN		1800000 /* uV */
 #define USB_SSPHY_1P8_VOL_MAX		1800000 /* uV */
 #define USB_SSPHY_1P8_HPM_LOAD		23000	/* uA */
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+static bool (*oplus_ignore_usb_notify)(void);
+void oplus_dwc3_config_usbphy_pfunc(bool (*pfunc)(void))
+{
+	oplus_ignore_usb_notify = pfunc;
+}
+EXPORT_SYMBOL(oplus_dwc3_config_usbphy_pfunc);
+#endif
 
 /* unfortunately, dwc3 core doesn't manage multiple dwc3 instances for trace */
 void *dwc_trace_ipc_log_ctxt;
@@ -4780,6 +4797,12 @@ static int dwc3_msm_set_role(struct dwc3_msm *mdwc, enum usb_role role)
 	dbg_log_string("cur_role:%s new_role:%s refcnt:%d\n", usb_role_string(cur_role),
 				usb_role_string(role), mdwc->refcnt_dp_usb);
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	dev_err(mdwc->dev,
+		"%s: cur_role:%s new_role:%s\n",
+		__func__,usb_role_string(cur_role),usb_role_string(role));
+#endif
+
 	/*
 	 * For boot up without USB cable connected case, don't check
 	 * previous role value to allow resetting USB controller and
@@ -5892,7 +5915,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		dwc3_ext_event_notify(mdwc);
 	}
 
+#ifndef OPLUS_FEATURE_CHG_BASIC
 	dwc3_ext_event_notify(mdwc);
+#endif
 
 	return 0;
 
@@ -6152,6 +6177,9 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 {
 	int ret = 0;
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	u32 val;
+#endif
 
 	if (on) {
 		dev_dbg(mdwc->dev, "%s: turn on host\n", __func__);
@@ -6220,6 +6248,15 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 
 		dwc3_msm_write_reg_field(mdwc->base, DWC3_GUSB3PIPECTL(0),
 				DWC3_GUSB3PIPECTL_SUSPHY, 1);
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+		/* disable host gen2 */
+		if (mdwc->ss_phy->flags & PHY_HOST_MODE){
+			dwc3_msm_write_reg_field(mdwc->base, USB3_PRI_LINK_REGS_LLUCTL(0), FORCE_GEN1_MASK, 1);
+			val = dwc3_msm_read_reg_field(mdwc->base, USB3_PRI_LINK_REGS_LLUCTL(0), FORCE_GEN1_MASK);
+			dev_info(mdwc->dev, "Turn on host: FORCE_GEN1_MASK = %d", val);
+		}
+#endif
 
 		/* Reduce the U3 exit handshake timer from 8us to approximately
 		 * 300ns to avoid lfps handshake interoperability issues
@@ -6402,6 +6439,12 @@ static int dwc3_otg_start_peripheral(struct dwc3_msm *mdwc, int on)
 		msm_dwc3_perf_vote_update(mdwc, true);
 		schedule_delayed_work(&mdwc->perf_vote_work,
 				msecs_to_jiffies(1000 * PM_QOS_SAMPLE_SEC));
+#ifdef OPLUS_FEATURE_CHG_BASIC
+		if (mdwc->force_disconnect) {
+			usb_gadget_connect(dwc->gadget);
+			mdwc->force_disconnect = false;
+		}
+#endif
 	} else {
 		dev_dbg(mdwc->dev, "%s: turn off gadget\n", __func__);
 		cancel_delayed_work_sync(&mdwc->perf_vote_work);
@@ -6428,13 +6471,29 @@ static int dwc3_otg_start_peripheral(struct dwc3_msm *mdwc, int on)
 		 * or pullup disable), and retry suspend again.
 		 */
 		ret = pm_runtime_put_sync(&mdwc->dwc3->dev);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+		if (ret < 0) {
+#else
 		if (ret == -EBUSY) {
+#endif
 			while (--timeout && dwc->connected)
 				msleep(20);
 			dbg_event(0xFF, "StopGdgt connected", dwc->connected);
 			pm_runtime_suspend(&mdwc->dwc3->dev);
 		}
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+		if ((dwc->connected) && (timeout == 0)) {
+			usb_gadget_disconnect(dwc->gadget);
+			timeout = 10;
+			while (timeout && !pm_runtime_suspended(dwc->dev)) {
+				msleep(20);
+				timeout--;
+			}
+			mdwc->force_disconnect = true;
+			dbg_event(0xFF, "Force Disconnect", mdwc->force_disconnect);
+		}
+#endif
 		/* wait for LPM, to ensure h/w is reset after stop_peripheral */
 		set_bit(WAIT_FOR_LPM, &mdwc->inputs);
 	}

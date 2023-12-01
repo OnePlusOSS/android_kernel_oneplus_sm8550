@@ -27,8 +27,9 @@
 #include <linux/uaccess.h>
 
 #include "internal.h"
-#ifndef __GENSYMS__
+#ifndef __GENKSYMS__
 #include <trace/hooks/syscall_check.h>
+#include <trace/hooks/mm.h>
 #endif
 
 /**
@@ -346,6 +347,38 @@ unsigned long randomize_stack_top(unsigned long stack_top)
 #endif
 }
 
+/**
+ * randomize_page - Generate a random, page aligned address
+ * @start:	The smallest acceptable address the caller will take.
+ * @range:	The size of the area, starting at @start, within which the
+ *		random address must fall.
+ *
+ * If @start + @range would overflow, @range is capped.
+ *
+ * NOTE: Historical use of randomize_range, which this replaces, presumed that
+ * @start was already page aligned.  We now align it regardless.
+ *
+ * Return: A page aligned address within [start, start + range).  On error,
+ * @start is returned.
+ */
+unsigned long randomize_page(unsigned long start, unsigned long range)
+{
+	if (!PAGE_ALIGNED(start)) {
+		range -= PAGE_ALIGN(start) - start;
+		start = PAGE_ALIGN(start);
+	}
+
+	if (start > ULONG_MAX - range)
+		range = ULONG_MAX - start;
+
+	range >>= PAGE_SHIFT;
+
+	if (range == 0)
+		return start;
+
+	return start + (get_random_long() % range << PAGE_SHIFT);
+}
+
 #ifdef CONFIG_ARCH_WANT_DEFAULT_TOPDOWN_MMAP_LAYOUT
 unsigned long arch_randomize_brk(struct mm_struct *mm)
 {
@@ -566,6 +599,7 @@ void *kvmalloc_node(size_t size, gfp_t flags, int node)
 {
 	gfp_t kmalloc_flags = flags;
 	void *ret;
+	bool use_vmalloc = false;
 
 	/*
 	 * vmalloc uses GFP_KERNEL for some internal allocations (e.g page tables)
@@ -574,6 +608,9 @@ void *kvmalloc_node(size_t size, gfp_t flags, int node)
 	if ((flags & GFP_KERNEL) != GFP_KERNEL)
 		return kmalloc_node(size, flags, node);
 
+	trace_android_vh_kvmalloc_node_use_vmalloc(size, &kmalloc_flags, &use_vmalloc);
+	if (use_vmalloc)
+		goto use_vmalloc_node;
 	/*
 	 * We want to attempt a large physically contiguous block first because
 	 * it is less likely to fragment multiple larger blocks and therefore
@@ -603,6 +640,7 @@ void *kvmalloc_node(size_t size, gfp_t flags, int node)
 		return NULL;
 	}
 
+use_vmalloc_node:
 	return __vmalloc_node(size, 1, flags, node,
 			__builtin_return_address(0));
 }
@@ -670,6 +708,56 @@ static inline void *__page_rmapping(struct page *page)
 	return (void *)mapping;
 }
 
+/**
+ * __vmalloc_array - allocate memory for a virtually contiguous array.
+ * @n: number of elements.
+ * @size: element size.
+ * @flags: the type of memory to allocate (see kmalloc).
+ */
+void *__vmalloc_array(size_t n, size_t size, gfp_t flags)
+{
+	size_t bytes;
+
+	if (unlikely(check_mul_overflow(n, size, &bytes)))
+		return NULL;
+	return __vmalloc(bytes, flags);
+}
+EXPORT_SYMBOL(__vmalloc_array);
+
+/**
+ * vmalloc_array - allocate memory for a virtually contiguous array.
+ * @n: number of elements.
+ * @size: element size.
+ */
+void *vmalloc_array(size_t n, size_t size)
+{
+	return __vmalloc_array(n, size, GFP_KERNEL);
+}
+EXPORT_SYMBOL(vmalloc_array);
+
+/**
+ * __vcalloc - allocate and zero memory for a virtually contiguous array.
+ * @n: number of elements.
+ * @size: element size.
+ * @flags: the type of memory to allocate (see kmalloc).
+ */
+void *__vcalloc(size_t n, size_t size, gfp_t flags)
+{
+	return __vmalloc_array(n, size, flags | __GFP_ZERO);
+}
+EXPORT_SYMBOL(__vcalloc);
+
+/**
+ * vcalloc - allocate and zero memory for a virtually contiguous array.
+ * @n: number of elements.
+ * @size: element size.
+ */
+void *vcalloc(size_t n, size_t size)
+{
+	return __vmalloc_array(n, size, GFP_KERNEL | __GFP_ZERO);
+}
+EXPORT_SYMBOL(vcalloc);
+
 /* Neutral page->mapping pointer to address_space or anon_vma or other */
 void *page_rmapping(struct page *page)
 {
@@ -696,6 +784,18 @@ bool page_mapped(struct page *page)
 		if (atomic_read(&page[i]._mapcount) >= 0)
 			return true;
 	}
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/* page_mapcount is not reliable for cont_pte pages */
+	if (ContPteHugePageHead(page) && PageAnon(page)) {
+		if (ContPteHugePageDoubleMap(page) ||
+			atomic_read(compound_mapcount_ptr(page)) >= 0)
+			return true;
+		else
+			return false;
+	}
+#endif
+
 	return false;
 }
 EXPORT_SYMBOL(page_mapped);

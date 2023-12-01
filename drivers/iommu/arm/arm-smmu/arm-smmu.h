@@ -5,6 +5,8 @@
  * Copyright (C) 2013 ARM Limited
  *
  * Author: Will Deacon <will.deacon@arm.com>
+ *
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _ARM_SMMU_H
@@ -24,7 +26,7 @@
 #include <linux/types.h>
 #include <linux/qcom-iommu-util.h>
 
-#include "../../qcom-io-pgtable.h"
+#include <linux/qcom-io-pgtable.h>
 
 /* Configuration registers */
 #define ARM_SMMU_GR0_sCR0		0x0

@@ -159,6 +159,7 @@ static inline bool __transparent_hugepage_enabled(struct vm_area_struct *vma)
 	if (vma_is_temporary_stack(vma))
 		return false;
 
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 	if (transparent_hugepage_flags & (1 << TRANSPARENT_HUGEPAGE_FLAG))
 		return true;
 
@@ -170,6 +171,13 @@ static inline bool __transparent_hugepage_enabled(struct vm_area_struct *vma)
 		return !!(vma->vm_flags & VM_HUGEPAGE);
 
 	return false;
+#else
+	/* we don't support dax 64KB hugepage yet */
+	if (vma_is_dax(vma))
+		return false;
+
+	return true;
+#endif
 }
 
 bool transparent_hugepage_active(struct vm_area_struct *vma);
@@ -267,7 +275,7 @@ static inline unsigned int thp_order(struct page *page)
 {
 	VM_BUG_ON_PGFLAGS(PageTail(page), page);
 	if (PageHead(page))
-		return HPAGE_PMD_ORDER;
+		return page[1].compound_order;
 	return 0;
 }
 
@@ -279,7 +287,7 @@ static inline int thp_nr_pages(struct page *page)
 {
 	VM_BUG_ON_PGFLAGS(PageTail(page), page);
 	if (PageHead(page))
-		return HPAGE_PMD_NR;
+		return page[1].compound_nr;
 	return 1;
 }
 
@@ -313,10 +321,31 @@ void mm_put_huge_zero_page(struct mm_struct *mm);
 
 #define mk_huge_pmd(page, prot) pmd_mkhuge(mk_pmd(page, prot))
 
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 static inline bool thp_migration_supported(void)
 {
 	return IS_ENABLED(CONFIG_ARCH_ENABLE_THP_MIGRATION);
 }
+
+static inline void vma_adjust_cont_pte_trans_huge(struct vm_area_struct *vma,
+				   unsigned long start,
+				   unsigned long end,
+				   long adjust_next)
+{
+
+}
+#else
+static inline bool thp_migration_supported(void)
+{
+	/* we don't support migration of cont_pte hugepage */
+	return false;
+}
+
+void vma_adjust_cont_pte_trans_huge(struct vm_area_struct *vma,
+				   unsigned long start,
+				   unsigned long end,
+				   long adjust_next);
+#endif
 
 static inline struct list_head *page_deferred_list(struct page *page)
 {

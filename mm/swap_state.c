@@ -118,6 +118,13 @@ int add_to_swap_cache(struct page *page, swp_entry_t entry,
 		xas_create_range(&xas);
 		if (xas_error(&xas))
 			goto unlock;
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (nr > 1) {
+			CHP_BUG_ON(!is_thp_swap(swp_swap_info(entry)));
+			CHP_BUG_ON(!IS_ALIGNED(swp_offset(entry), HPAGE_CONT_PTE_NR));
+		}
+#endif
 		for (i = 0; i < nr; i++) {
 			VM_BUG_ON_PAGE(xas.xa_index != idx + i, page);
 			old = xas_load(&xas);
@@ -703,10 +710,18 @@ static inline void swap_ra_clamp_pfn(struct vm_area_struct *vma,
 				     unsigned long *start,
 				     unsigned long *end)
 {
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 	*start = max3(lpfn, PFN_DOWN(vma->vm_start),
 		      PFN_DOWN(faddr & PMD_MASK));
 	*end = min3(rpfn, PFN_DOWN(vma->vm_end),
 		    PFN_DOWN((faddr & PMD_MASK) + PMD_SIZE));
+#else
+	/* make read-ahead aligned with CONT_PTE_SHIFT */
+	*start = max(PFN_DOWN(READ_ONCE(vma->vm_start)),
+		     PFN_DOWN(faddr & CONT_PTE_MASK));
+	*end = min(PFN_DOWN(READ_ONCE(vma->vm_end)),
+		   PFN_DOWN((faddr & CONT_PTE_MASK) + CONT_PTE_SIZE));
+#endif
 }
 
 static void swap_ra_info(struct vm_fault *vmf,

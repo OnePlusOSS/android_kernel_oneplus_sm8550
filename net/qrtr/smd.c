@@ -78,6 +78,9 @@ static int qcom_smd_qrtr_probe(struct rpmsg_device *rpdev)
 
 	qdev->channel = rpdev->ept;
 	qdev->dev = &rpdev->dev;
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	qdev->ep.dev = &rpdev->dev;
+#endif
 	qdev->ep.xmit = qcom_smd_qrtr_send;
 
 	rc = of_property_read_u32(rpdev->dev.of_node, "qcom,net-id", &net_id);

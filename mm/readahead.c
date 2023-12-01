@@ -120,6 +120,7 @@ gfp_t readahead_gfp_mask(struct address_space *x)
 	gfp_t mask = mapping_gfp_mask(x) | __GFP_NORETRY | __GFP_NOWARN;
 
 	trace_android_rvh_set_readahead_gfp_mask(&mask);
+	trace_android_rvh_update_readahead_gfp_mask(x, &mask);
 	return mask;
 }
 EXPORT_SYMBOL_GPL(readahead_gfp_mask);
@@ -140,6 +141,17 @@ static void read_pages(struct readahead_control *rac, struct list_head *pages,
 		aops->readahead(rac);
 		/* Clean up the remaining pages */
 		while ((page = readahead_page(rac))) {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (PageCont(page)) {
+				pr_err("@@@FIXME: %s readahead_page page:%pK pfn:%lx flags:%lx ref:%d index:%lx process:%s %d compound_head:%lx %pK cma:%d\n",
+						__func__, page, page_to_pfn(page), page->flags, atomic_read(&page->_refcount),
+						page->index, current->comm, current->pid, page->compound_head, compound_head(page),
+						within_cont_pte_cma(page_to_pfn(page)));
+				dump_page(page, "THP readahead_page");
+				dump_page(compound_head(page), "THP readahead_page head");
+				CHP_BUG_ON(1);
+			}
+#endif
 			unlock_page(page);
 			put_page(page);
 		}
@@ -455,12 +467,25 @@ static void ondemand_readahead(struct readahead_control *ractl,
 	unsigned long index = readahead_index(ractl);
 	pgoff_t prev_index;
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/* prevent syscall from read hugepages ahead */
+	if (ractl->mapping && ractl->mapping->host && ractl->mapping->host->may_cont_pte) {
+		ra->start = index;
+		ra->size = CONT_PTES - (index % CONT_PTES);
+		ra->async_size = 0;
+		do_page_cache_ra(ractl, ra->size, ra->async_size);
+		return;
+	}
+#endif
+
 	/*
 	 * If the request exceeds the readahead window, allow the read to
 	 * be up to the optimal hardware IO size
 	 */
 	if (req_size > max_pages && bdi->io_pages > max_pages)
 		max_pages = min(req_size, bdi->io_pages);
+
+	trace_android_vh_ra_tuning_max_page(ractl, &max_pages);
 
 	/*
 	 * start of file
@@ -579,6 +604,8 @@ void page_cache_sync_ra(struct readahead_control *ractl,
 		req_count = 1;
 		do_forced_ra = true;
 	}
+
+	trace_android_vh_page_cache_forced_ra(ractl, req_count, &do_forced_ra);
 
 	/* be dumb */
 	if (do_forced_ra) {

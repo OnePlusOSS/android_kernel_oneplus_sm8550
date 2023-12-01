@@ -95,6 +95,10 @@
 #ifndef CONFIG_NUMA
 struct pglist_data __refdata contig_page_data;
 EXPORT_SYMBOL(contig_page_data);
+
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && CONFIG_CONT_PTE_HUGEPAGE_LRU
+struct chp_lruvec __refdata contig_chp_lruvec;
+#endif
 #endif
 
 unsigned long max_low_pfn;
@@ -1621,7 +1625,13 @@ void __init __memblock_free_late(phys_addr_t base, phys_addr_t size)
 	end = PFN_DOWN(base + size);
 
 	for (; cursor < end; cursor++) {
-		memblock_free_pages(pfn_to_page(cursor), cursor, 0);
+		/*
+		 * Reserved pages are always initialized by the end of
+		 * memblock_free_all() (by memmap_init() and, if deferred
+		 * initialization is enabled, memmap_init_reserved_pages()), so
+		 * these pages can be released directly to the buddy allocator.
+		 */
+		__free_pages_core(pfn_to_page(cursor), 0);
 		totalram_pages_inc();
 	}
 }

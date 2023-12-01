@@ -540,7 +540,7 @@ static void throtl_pd_init(struct blkg_policy_data *pd)
 {
 	struct throtl_grp *tg = pd_to_tg(pd);
 	struct blkcg_gq *blkg = tg_to_blkg(tg);
-	struct throtl_data *td = blkg->q->td;
+	struct throtl_data *td = (struct throtl_data *)(blkg->q->android_oem_data1);
 	struct throtl_service_queue *sq = &tg->service_queue;
 
 	/*
@@ -950,7 +950,7 @@ static bool tg_with_in_bps_limit(struct throtl_grp *tg, struct bio *bio,
 				 u64 bps_limit, unsigned long *wait)
 {
 	bool rw = bio_data_dir(bio);
-	u64 bytes_allowed, extra_bytes, tmp;
+	u64 bytes_allowed, extra_bytes;
 	unsigned long jiffy_elapsed, jiffy_wait, jiffy_elapsed_rnd;
 	unsigned int bio_size = throtl_bio_data_size(bio);
 
@@ -967,10 +967,8 @@ static bool tg_with_in_bps_limit(struct throtl_grp *tg, struct bio *bio,
 		jiffy_elapsed_rnd = tg->td->throtl_slice;
 
 	jiffy_elapsed_rnd = roundup(jiffy_elapsed_rnd, tg->td->throtl_slice);
-
-	tmp = bps_limit * jiffy_elapsed_rnd;
-	do_div(tmp, HZ);
-	bytes_allowed = tmp;
+	bytes_allowed = mul_u64_u64_div_u64(bps_limit, (u64)jiffy_elapsed_rnd,
+					    (u64)HZ);
 
 	if (tg->bytes_disp[rw] + bio_size <= bytes_allowed) {
 		if (wait)
@@ -1789,7 +1787,7 @@ static struct cftype throtl_files[] = {
 
 static void throtl_shutdown_wq(struct request_queue *q)
 {
-	struct throtl_data *td = q->td;
+	struct throtl_data *td = (struct throtl_data *)(q->android_oem_data1);
 
 	cancel_work_sync(&td->dispatch_work);
 }
@@ -2437,7 +2435,7 @@ int blk_throtl_init(struct request_queue *q)
 	INIT_WORK(&td->dispatch_work, blk_throtl_dispatch_work_fn);
 	throtl_service_queue_init(&td->service_queue);
 
-	q->td = td;
+	q->android_oem_data1 = (u64)td;
 	td->queue = q;
 
 	td->limit_valid[LIMIT_MAX] = true;
@@ -2457,13 +2455,14 @@ int blk_throtl_init(struct request_queue *q)
 
 void blk_throtl_exit(struct request_queue *q)
 {
-	BUG_ON(!q->td);
-	del_timer_sync(&q->td->service_queue.pending_timer);
+	struct throtl_data *td = (struct throtl_data *)(q->android_oem_data1);
+	BUG_ON(!td);
+	del_timer_sync(&td->service_queue.pending_timer);
 	throtl_shutdown_wq(q);
 	blkcg_deactivate_policy(q, &blkcg_policy_throtl);
-	free_percpu(q->td->latency_buckets[READ]);
-	free_percpu(q->td->latency_buckets[WRITE]);
-	kfree(q->td);
+	free_percpu(td->latency_buckets[READ]);
+	free_percpu(td->latency_buckets[WRITE]);
+	kfree(td);
 }
 
 void blk_throtl_register_queue(struct request_queue *q)
@@ -2471,7 +2470,7 @@ void blk_throtl_register_queue(struct request_queue *q)
 	struct throtl_data *td;
 	int i;
 
-	td = q->td;
+	td = (struct throtl_data *)(q->android_oem_data1);
 	BUG_ON(!td);
 
 	if (blk_queue_nonrot(q)) {

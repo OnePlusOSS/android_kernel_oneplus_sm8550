@@ -28,6 +28,10 @@ asflags-y  :=
 ccflags-y  :=
 cppflags-y :=
 ldflags-y  :=
+#ifdef OPLUS_FEATURE_CHG_BASIC
+KBUILD_LDS_MODULE_ATTACH :=
+sub_objtool_obj :=
+#endif
 
 subdir-asflags-y :=
 subdir-ccflags-y :=
@@ -232,6 +236,7 @@ objtool_args =								\
 	$(if $(CONFIG_FRAME_POINTER),, --no-fp)				\
 	$(if $(CONFIG_GCOV_KERNEL)$(CONFIG_LTO_CLANG), --no-unreachable)\
 	$(if $(CONFIG_RETPOLINE), --retpoline)				\
+	$(if $(CONFIG_RETHUNK), --rethunk)				\
 	$(if $(CONFIG_X86_SMAP), --uaccess)				\
 	$(if $(CONFIG_FTRACE_MCOUNT_USE_OBJTOOL), --mcount)		\
 	$(if $(CONFIG_SLS), --sls)
@@ -257,6 +262,10 @@ endif # CONFIG_STACK_VALIDATION
 objtool_dep = $(objtool_obj)					\
 	      $(wildcard include/config/ORC_UNWINDER		\
 			 include/config/STACK_VALIDATION)
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+objtool_dep += $(sub_objtool_obj)
+#endif
 
 ifdef CONFIG_TRIM_UNUSED_KSYMS
 cmd_gen_ksymdeps = \
@@ -307,11 +316,18 @@ $(obj)/%.lto.o: $(obj)/%.o FORCE
 	$(call if_changed,cc_lto_link_modules)
 endif
 
-cmd_mod = echo $(call real-search, $*.o, .o, -objs -y -m) | \
-	$(AWK) -v RS='( |\n)' '!x[$$0]++ { print("$(obj)/"$$0) }' > $@
+cmd_mod = printf '%s\n' $(call real-search, $*.o, .o, -objs -y -m) | \
+	$(AWK) '!x[$$0]++ { print("$(obj)/"$$0) }' > $@
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	cmd_mod_lds = $(if $(KBUILD_LDS_MODULE_ATTACH), cat $(srctree)/$(src)/$(firstword $(KBUILD_LDS_MODULE_ATTACH)) > $(@:.mod=.lds))
+#endif
 
 $(obj)/%.mod: FORCE
 	$(call if_changed,mod)
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	$(call cmd,mod_lds)
+#endif
 
 # List module undefined symbols
 cmd_undefined_syms = $(NM) $< | sed -n 's/^  *U //p' > $@
