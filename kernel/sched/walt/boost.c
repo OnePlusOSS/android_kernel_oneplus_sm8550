@@ -4,6 +4,7 @@
  */
 
 #include <linux/of.h>
+#include <linux/kernel.h>
 
 #include "walt.h"
 #include "trace.h"
@@ -234,6 +235,20 @@ static void sched_boost_disable_all(void)
 	}
 }
 
+noinline int tracing_mark_write(const char *buf)
+{
+	trace_printk(buf);
+	return 0;
+}
+
+void sched_boost_systrace_c(unsigned int sched_boost_type)
+{
+	char buf[256];
+
+	snprintf(buf, sizeof(buf), "C|9999|sched_boost|%d\n", sched_boost_type);
+	tracing_mark_write(buf);
+}
+
 static void _sched_set_boost(int type)
 {
 	if (type == 0)
@@ -251,6 +266,13 @@ static void _sched_set_boost(int type)
 	 */
 
 	sched_boost_type = sched_effective_boost();
+	/*
+	 * Don't allow to set FULL_THROTTLE_BOOST
+	 * fallback to CONSERVATIVE_BOOST
+	 */
+	if (sched_boost_type == FULL_THROTTLE_BOOST)
+		sched_boost_type = CONSERVATIVE_BOOST;
+	sched_boost_systrace_c(sched_boost_type);
 	sysctl_sched_boost = sched_boost_type;
 	set_boost_policy(sysctl_sched_boost);
 	trace_sched_set_boost(sysctl_sched_boost);
