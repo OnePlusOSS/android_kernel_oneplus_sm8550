@@ -1289,7 +1289,11 @@ static int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 	 * will fall-back to using it for error handling (or if the bufio cache
 	 * doesn't have required hashes).
 	 */
+#ifdef CONFIG_BLOCKIO_UX_OPT
+	v->verify_wq = alloc_workqueue("kveritydX", WQ_MEM_RECLAIM | WQ_HIGHPRI | WQ_UX | WQ_UNBOUND, 0);
+#else
 	v->verify_wq = alloc_workqueue("kverityd", WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
+#endif
 	if (!v->verify_wq) {
 		ti->error = "Cannot allocate workqueue";
 		r = -ENOMEM;

@@ -51,7 +51,6 @@
 #include <linux/sched/isolation.h>
 #include <linux/nmi.h>
 #include <linux/kvm_para.h>
-
 #include "workqueue_internal.h"
 
 #include <trace/hooks/wqlockup.h>
@@ -382,6 +381,17 @@ static void show_pwq(struct pool_workqueue *pwq);
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/workqueue.h>
+
+#ifdef CONFIG_BLOCKIO_UX_OPT
+extern void _trace_android_vh_record_pcpu_rwsem_starttime(
+	struct task_struct *tsk, unsigned long settime);
+#define VIRTUAL_KWORKER_NICE (-1000)
+#define HOOKS_SET_UX_SIGN (1)
+void set_kworker_light(struct task_struct *task)
+{
+	_trace_android_vh_record_pcpu_rwsem_starttime(task, HOOKS_SET_UX_SIGN);
+}
+#endif
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(workqueue_execute_start);
 EXPORT_TRACEPOINT_SYMBOL_GPL(workqueue_execute_end);
@@ -1952,7 +1962,6 @@ static struct worker *create_worker(struct worker_pool *pool)
 	struct worker *worker;
 	int id;
 	char id_buf[16];
-
 	/* ID is needed to determine kthread name */
 	id = ida_alloc(&pool->worker_ida, GFP_KERNEL);
 	if (id < 0)
@@ -1964,18 +1973,32 @@ static struct worker *create_worker(struct worker_pool *pool)
 
 	worker->id = id;
 
+#ifdef CONFIG_BLOCKIO_UX_OPT
+	if (pool->cpu >= 0)
+		snprintf(id_buf, sizeof(id_buf), "%d:%d%s", pool->cpu, id,
+			(pool->attrs->nice == -1000) ? "X" : pool->attrs->nice < 0  ? "H" : "");
+	else
+		snprintf(id_buf, sizeof(id_buf), "%s%d:%d", (pool->attrs->nice == -1000) ? "X" : "u", pool->id, id);
+#else
 	if (pool->cpu >= 0)
 		snprintf(id_buf, sizeof(id_buf), "%d:%d%s", pool->cpu, id,
 			 pool->attrs->nice < 0  ? "H" : "");
 	else
 		snprintf(id_buf, sizeof(id_buf), "u%d:%d", pool->id, id);
-
+#endif
 	worker->task = kthread_create_on_node(worker_thread, worker, pool->node,
 					      "kworker/%s", id_buf);
 	if (IS_ERR(worker->task))
 		goto fail;
-
+#ifdef CONFIG_BLOCKIO_UX_OPT
+	if (pool->attrs->nice == VIRTUAL_KWORKER_NICE) {
+		set_kworker_light(worker->task);
+		set_user_nice(worker->task, MIN_NICE);
+	} else
+		set_user_nice(worker->task, pool->attrs->nice);
+#else
 	set_user_nice(worker->task, pool->attrs->nice);
+#endif
 	kthread_bind_mask(worker->task, pool->attrs->cpumask);
 
 	/* successful, attach the worker to the pool */
@@ -4004,6 +4027,11 @@ apply_wqattrs_prepare(struct workqueue_struct *wq,
 	 * the default pwq covering whole @attrs->cpumask.  Always create
 	 * it even if we don't use it immediately.
 	 */
+
+#ifdef CONFIG_BLOCKIO_UX_OPT
+	if (wq->flags & WQ_UX)
+		new_attrs->nice = VIRTUAL_KWORKER_NICE;
+#endif
 	ctx->dfl_pwq = alloc_unbound_pwq(wq, new_attrs);
 	if (!ctx->dfl_pwq)
 		goto out_free;
@@ -4022,6 +4050,10 @@ apply_wqattrs_prepare(struct workqueue_struct *wq,
 	/* save the user configured attrs and sanitize it. */
 	copy_workqueue_attrs(new_attrs, attrs);
 	cpumask_and(new_attrs->cpumask, new_attrs->cpumask, cpu_possible_mask);
+#ifdef CONFIG_BLOCKIO_UX_OPT
+	if (wq->flags & WQ_UX)
+		new_attrs->nice = VIRTUAL_KWORKER_NICE;
+#endif
 	ctx->attrs = new_attrs;
 
 	ctx->wq = wq;
@@ -5531,7 +5563,13 @@ static ssize_t wq_nice_show(struct device *dev, struct device_attribute *attr,
 	int written;
 
 	mutex_lock(&wq->mutex);
+#ifdef CONFIG_BLOCKIO_UX_OPT
+	written = scnprintf(buf, PAGE_SIZE, "%d\n",
+			wq->unbound_attrs->nice == VIRTUAL_KWORKER_NICE ?
+				MIN_NICE : wq->unbound_attrs->nice);
+#else
 	written = scnprintf(buf, PAGE_SIZE, "%d\n", wq->unbound_attrs->nice);
+#endif
 	mutex_unlock(&wq->mutex);
 
 	return written;
