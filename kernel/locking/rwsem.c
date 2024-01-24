@@ -1026,6 +1026,8 @@ queue:
 			raw_spin_unlock_irq(&sem->wait_lock);
 			rwsem_set_reader_owned(sem);
 			lockevent_inc(rwsem_rlock_fast);
+			trace_android_vh_record_rwsem_lock_starttime(
+							current, jiffies);
 			return sem;
 		}
 		adjustment += RWSEM_FLAG_WAITERS;
@@ -1368,7 +1370,6 @@ static inline void __up_read(struct rw_semaphore *sem)
 	DEBUG_RWSEMS_WARN_ON(sem->magic != sem, sem);
 	DEBUG_RWSEMS_WARN_ON(!is_rwsem_reader_owned(sem), sem);
 
-	trace_android_vh_record_rwsem_lock_starttime(current, 0);
 	rwsem_clear_reader_owned(sem);
 	tmp = atomic_long_add_return_release(-RWSEM_READER_BIAS, &sem->count);
 	DEBUG_RWSEMS_WARN_ON(tmp < 0, sem);
@@ -1377,6 +1378,7 @@ static inline void __up_read(struct rw_semaphore *sem)
 		clear_nonspinnable(sem);
 		rwsem_wake(sem);
 	}
+	trace_android_vh_record_rwsem_lock_starttime(current, 0);
 }
 
 /*
@@ -1394,13 +1396,13 @@ static inline void __up_write(struct rw_semaphore *sem)
 	DEBUG_RWSEMS_WARN_ON((rwsem_owner(sem) != current) &&
 			    !rwsem_test_oflags(sem, RWSEM_NONSPINNABLE), sem);
 
-	trace_android_vh_record_rwsem_lock_starttime(current, 0);
 	preempt_disable();
 	rwsem_clear_owner(sem);
 	tmp = atomic_long_fetch_add_release(-RWSEM_WRITER_LOCKED, &sem->count);
 	preempt_enable();
 	if (unlikely(tmp & RWSEM_FLAG_WAITERS))
 		rwsem_wake(sem);
+	trace_android_vh_record_rwsem_lock_starttime(current, 0);
 }
 
 /*

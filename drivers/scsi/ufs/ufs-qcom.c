@@ -170,10 +170,9 @@ static inline void cancel_dwork_unvote_cpufreq(struct ufs_hba *hba)
 	if (host->cpufreq_dis)
 		return;
 
-	cancel_delayed_work_sync(&host->fwork);
+	flush_work(&host->fwork);
 	if (!host->cur_freq_vote)
 		return;
-	atomic_set(&host->num_reqs_threshold, 0);
 
 	err = ufs_qcom_mod_min_cpufreq(host->config_cpu,
 				       host->min_cpu_scale_freq);
@@ -1333,39 +1332,27 @@ static void ufs_qcom_toggle_pri_affinity(struct ufs_hba *hba, bool on)
 
 static void ufs_qcom_cpufreq_dwork(struct work_struct *work)
 {
-	struct ufs_qcom_host *host = container_of(to_delayed_work(work),
+	struct ufs_qcom_host *host = container_of(work,
 							struct ufs_qcom_host,
 							fwork);
-	unsigned long cur_thres = atomic_read(&host->num_reqs_threshold);
 	unsigned int freq_val = -1;
 	int err = -1;
 
-	atomic_set(&host->num_reqs_threshold, 0);
-
-	if (cur_thres > NUM_REQS_HIGH_THRESH && !host->cur_freq_vote) {
+	if (host->cur_freq_vote) {
 		freq_val = host->max_cpu_scale_freq;
 		ufs_qcom_toggle_pri_affinity(host->hba, true);
-	} else if (cur_thres < NUM_REQS_LOW_THRESH && host->cur_freq_vote) {
+	} else {
 		freq_val = host->min_cpu_scale_freq;
 		ufs_qcom_toggle_pri_affinity(host->hba, false);
 	}
-
-	if (freq_val == -1)
-		goto out;
 
 	err = ufs_qcom_mod_min_cpufreq(host->config_cpu, freq_val);
 	if (err < 0)
 		ufs_qcom_msg(ERR, host->hba->dev, "fail set cpufreq-fmin to %d: %u\n",
 				err, freq_val);
-	else if (freq_val == host->max_cpu_scale_freq)
-		host->cur_freq_vote = true;
-	else if (freq_val == host->min_cpu_scale_freq)
-		host->cur_freq_vote = false;
-	ufs_qcom_msg(DBG, host->hba->dev, "cur_freq_vote=%d,freq_val=%u,cth=%u\n",
-		host->cur_freq_vote, freq_val, cur_thres);
-out:
-	queue_delayed_work(host->ufs_qos->workq, &host->fwork,
-			   msecs_to_jiffies(UFS_QCOM_LOAD_MON_DLY_MS));
+
+	ufs_qcom_msg(DBG, host->hba->dev, "cur_freq_vote=%d,freq_val=%u\n",
+		host->cur_freq_vote, freq_val);
 }
 
 static int add_group_qos(struct qos_cpu_group *qcg, enum constraint type)
@@ -1495,8 +1482,6 @@ out:
 	ufs_qcom_log_str(host, "$,%d,%d,%d,%d,%d,%d\n",
 			pm_op, hba->rpm_lvl, hba->spm_lvl, hba->uic_link_state,
 			hba->curr_dev_pwr_mode, err);
-	queue_delayed_work(host->ufs_qos->workq, &host->fwork,
-	msecs_to_jiffies(UFS_QCOM_LOAD_MON_DLY_MS));
 	return err;
 }
 
@@ -2936,8 +2921,24 @@ static void ufs_qcom_qos(struct ufs_hba *hba, int tag, bool is_scsi_cmd)
 	if (!qcg)
 		return;
 
-	if (qcg->perf_core && !host->cpufreq_dis)
+	if (qcg->perf_core && !host->cpufreq_dis){
 		atomic_inc(&host->num_reqs_threshold);
+		//  * ufs resume only for msm-5.15 kernel at perf purpose.begin */
+		if (atomic_read(&host->num_reqs_threshold) >= NUM_REQS_JUDGE_THRESH) {
+			ktime_t now = ktime_get();
+			if ((now - host->throughput_judge_time) < REQS_JUDGE_SHORT_TIME && !atomic_read(&host->hi_pri_en) && !atomic_read(&host->therm_mitigation)){
+				host->cur_freq_vote = true;
+				queue_work(host->ufs_qos->workq, &host->fwork);
+			}
+			else if ((now - host->throughput_judge_time) > REQS_JUDGE_LONG_TIME && atomic_read(&host->hi_pri_en)){
+				host->cur_freq_vote = false;
+				queue_work(host->ufs_qos->workq, &host->fwork);
+			}
+			atomic_set(&host->num_reqs_threshold, 0);
+			host->throughput_judge_time = now;
+		}
+		//  * ufs resume only for msm-5.15 kernel at perf purpose.end */
+	}
 
 	if (qcg->voted) {
 		ufs_qcom_msg(DBG, qcg->host->hba->dev,
@@ -3022,7 +3023,7 @@ static int ufs_qcom_setup_qos(struct ufs_hba *hba)
 				err);
 			host->cpufreq_dis = true;
 		} else {
-			INIT_DELAYED_WORK(&host->fwork, ufs_qcom_cpufreq_dwork);
+			INIT_WORK(&host->fwork, ufs_qcom_cpufreq_dwork);
 		}
 	}
 	qr->workq = create_singlethread_workqueue("qc_ufs_qos_swq");
@@ -4191,8 +4192,6 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 		ufs_qcom_register_minidump((uintptr_t)hba->host,
 					sizeof(struct Scsi_Host), "UFS_SHOST", 0);
 	}
-	queue_delayed_work(host->ufs_qos->workq, &host->fwork,
-	msecs_to_jiffies(UFS_QCOM_LOAD_MON_DLY_MS));
 	goto out;
 
 out_disable_vccq_parent:
@@ -4390,14 +4389,6 @@ static int ufs_qcom_clk_scale_notify(struct ufs_hba *hba,
 			return err;
 		if (scale_up) {
 			err = ufs_qcom_clk_scale_up_pre_change(hba);
-			if (!host->cpufreq_dis &&
-			    !(atomic_read(&host->therm_mitigation))) {
-				atomic_set(&host->num_reqs_threshold, 0);
-				queue_delayed_work(host->ufs_qos->workq,
-						  &host->fwork,
-					msecs_to_jiffies(
-						UFS_QCOM_LOAD_MON_DLY_MS));
-			}
 		} else {
 			err = ufs_qcom_clk_scale_down_pre_change(hba);
 			cancel_dwork_unvote_cpufreq(hba);

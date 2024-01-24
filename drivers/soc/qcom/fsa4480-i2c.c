@@ -569,7 +569,7 @@ int fsa4480_switch_event(struct device_node *node,
 					FSA4480_SWITCH_SETTINGS, setting_reg_val, FSA4480_SWITCH_CONTROL, control_reg_val);
 			#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_FEEDBACK)
 			/* Add for switch mode err */
-			scnprintf(buf, sizeof(buf) - 1, "func@@%s$$typec_mode@@%ld$$regs@@0x%x,0x%x", \
+			scnprintf(buf, sizeof(buf) - 1, "func@@%s$$typec_mode@@%d$$regs@@0x%x,0x%x", \
 					__func__, fsa_priv->usbc_mode.counter, setting_reg_val, control_reg_val);
 			upload_mm_fb_kevent_to_atlas_limit(OPLUS_AUDIO_EVENTID_HEADSET_DET, buf, MM_FB_KEY_RATELIMIT_5MIN);
 			#endif /* CONFIG_OPLUS_FEATURE_MM_FEEDBACK */
