@@ -46,6 +46,13 @@
 #define BCL_VBAT_COMP_TLOW    0x4A
 #define BCL_VBAT_CONV_REQ     0x72
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+#define BCL_H0_DGL_CTL        0x55
+#define BCL_L0_DGL_CLR_CTL    0x65
+#define BCL_H1_DGL_CTL        0x56
+#define BCL_L1_DGL_CLR_CTL    0x66
+#endif
+
 #define BCL_GEN3_MAJOR_REV    4
 #define BCL_PARAM_HAS_ADC      BIT(0)
 #define BCL_PARAM_HAS_IBAT_ADC BIT(2)
@@ -651,7 +658,9 @@ static int bcl_get_devicetree_data(struct platform_device *pdev,
 	int ret = 0;
 	const __be32 *prop = NULL;
 	struct device_node *dev_node = pdev->dev.of_node;
-
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	u8 h0_dgl_time, l0_dgl_time,h1_dgl_time,l1_dgl_time;
+#endif
 	prop = of_get_address(dev_node, 0, NULL, NULL);
 	if (prop) {
 		bcl_perph->fg_bcl_addr = be32_to_cpu(*prop);
@@ -670,6 +679,35 @@ static int bcl_get_devicetree_data(struct platform_device *pdev,
 
 	ret = bcl_get_ibat_ext_range_factor(pdev,
 					&bcl_perph->ibat_ext_range_factor);
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	if(!of_property_read_u8(dev_node, "bcl,h0_dgl_time", &h0_dgl_time)) {
+		dev_err(&pdev->dev, "oplus bcl test\n");
+		ret = bcl_write_register(bcl_perph, BCL_H0_DGL_CTL, h0_dgl_time);
+		if (ret < 0)
+			pr_err("Error reading register:BCL_H0_DGL_CTL ret:%d\n", ret);
+	}
+
+	if(!of_property_read_u8(dev_node, "bcl,l0_dgl_time", &l0_dgl_time)) {
+		ret = bcl_write_register(bcl_perph, BCL_L0_DGL_CLR_CTL, l0_dgl_time);
+		if (ret < 0)
+			pr_err("Error reading register:BCL_L0_DGL_CLR_CTL ret:%d\n", ret);
+	}
+
+	if(!of_property_read_u8(dev_node, "bcl,h1_dgl_time", &h1_dgl_time)) {
+		dev_err(&pdev->dev, "oplus bcl test\n");
+		ret = bcl_write_register(bcl_perph, BCL_H1_DGL_CTL, h1_dgl_time);
+		if (ret < 0)
+			pr_err("Error reading register:BCL_H1_DGL_CTL ret:%d\n", ret);
+	}
+
+	if(!of_property_read_u8(dev_node, "bcl,l1_dgl_time", &l1_dgl_time)) {
+		dev_err(&pdev->dev, "oplus bcl test\n");
+		ret = bcl_write_register(bcl_perph, BCL_L1_DGL_CLR_CTL, l1_dgl_time);
+		if (ret < 0)
+			pr_err("Error reading register:BCL_L1_DGL_CLR_CTL ret:%d\n", ret);
+	}
+#endif
 
 	return ret;
 }

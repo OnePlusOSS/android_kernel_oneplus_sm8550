@@ -23,9 +23,9 @@
 #include <soc/qcom/boot_stats.h>
 
 #define SPI_NUM_CHIPSELECT	(4)
-#define SPI_XFER_TIMEOUT_MS	(250)
+#define SPI_XFER_TIMEOUT_MS	(3000)
 #define SPI_AUTO_SUSPEND_DELAY	(250)
-#define SPI_XFER_TIMEOUT_OFFSET	(250)
+#define SPI_XFER_TIMEOUT_OFFSET	(3000)
 /* SPI SE specific registers */
 #define SE_SPI_CPHA		(0x224)
 #define SE_SPI_LOOPBACK		(0x22C)
@@ -2156,6 +2156,13 @@ static int spi_geni_probe(struct platform_device *pdev)
 			goto spi_geni_probe_err;
 		}
 
+		/* to remove the votes doing icc enable/disable */
+		ret = geni_icc_enable(spi_rsc);
+		if (ret) {
+			dev_err(&pdev->dev, "%s: icc enable failed ret:%d\n", __func__, ret);
+			return ret;
+		}
+
 		ret = pinctrl_select_state(geni_mas->geni_pinctrl,
 						geni_mas->geni_gpio_sleep);
 		if (ret) {
@@ -2192,6 +2199,7 @@ static int spi_geni_probe(struct platform_device *pdev)
 			goto spi_geni_probe_err;
 		}
 
+		irq_set_status_flags(geni_mas->irq, IRQ_NOAUTOEN);
 		ret = devm_request_irq(&pdev->dev, geni_mas->irq,
 			geni_spi_irq, IRQF_TRIGGER_HIGH, "spi_geni", geni_mas);
 		if (ret) {

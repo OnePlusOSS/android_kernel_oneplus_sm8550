@@ -27,6 +27,7 @@ obj-$(CONFIG_GENERIC_ARCH_TOPOLOGY) += arch_topology.o
 obj-$(CONFIG_GENERIC_ARCH_NUMA) += arch_numa.o
 
 obj-y			+= test/
+obj-$(CONFIG_OPLUS_FW_UPDATE)	+= kernelFwUpdate/
 
 ccflags-$(CONFIG_DEBUG_DRIVER) := -DDEBUG
 

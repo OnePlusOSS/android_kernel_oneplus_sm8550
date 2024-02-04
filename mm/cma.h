@@ -31,6 +31,9 @@ struct cma {
 	struct cma_kobject *cma_kobj;
 #endif
 };
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+extern spinlock_t cont_pte_cma_spinlock;
+#endif
 
 extern struct cma cma_areas[MAX_CMA_AREAS];
 extern unsigned cma_area_count;

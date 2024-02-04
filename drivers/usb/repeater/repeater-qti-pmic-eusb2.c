@@ -89,6 +89,9 @@
 #define V_CLK_19P2M_EN			BIT(6)
 #define V_CLK_19P2M_EN_SHIFT		6
 
+#undef dev_dbg
+#define dev_dbg dev_err
+
 struct eusb2_repeater {
 	struct usb_repeater	ur;
 	struct regmap		*regmap;
@@ -113,6 +116,10 @@ struct eusb2_repeater {
 
 	u32			*param_override_seq;
 	u8			param_override_seq_cnt;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	u32			*param_override_seq_host;
+	u8			param_override_seq_cnt_host;
+#endif
 };
 
 /* Perform one or more register read */
@@ -306,10 +313,22 @@ static int eusb2_repeater_init(struct usb_repeater *ur)
 			container_of(ur, struct eusb2_repeater, ur);
 	unsigned int rptr_init_cnt = INIT_MAX_CNT;
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	if ((ur->flags & PHY_HOST_MODE) && er->param_override_seq_host) {
+		eusb2_repeater_update_seq(er, er->param_override_seq_host,
+			er->param_override_seq_cnt_host);
+		dev_err(er->ur.dev, "Using host eye-diagram parameters!\n");
+	} else if (er->param_override_seq) {
+	/* override init sequence using devicetree based values */
+		eusb2_repeater_update_seq(er, er->param_override_seq,
+			er->param_override_seq_cnt);
+		dev_err(er->ur.dev, "Using device eye-diagram parameters!\n");
+	}
+#else
 	/* override init sequence using devicetree based values */
 	eusb2_repeater_update_seq(er, er->param_override_seq,
 			er->param_override_seq_cnt);
-
+#endif
 	/* override tune params using debugfs based values */
 	if (er->usb2_crossover && er->usb2_crossover <= 0x7)
 		eusb2_repeater_masked_write(er, EUSB2_TUNE_USB2_CROSSOVER,
@@ -492,6 +511,38 @@ static int eusb2_repeater_probe(struct platform_device *pdev)
 			goto err_probe;
 		}
 	}
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	num_elem = of_property_count_elems_of_size(dev->of_node,
+				"qcom,param-override-seq-host",
+				sizeof(*er->param_override_seq_host));
+	if (num_elem > 0) {
+		if (num_elem % 2) {
+			dev_err(dev, "invalid param_override_seq_host_len\n");
+			ret = -EINVAL;
+			goto err_probe;
+		}
+
+		er->param_override_seq_cnt_host = num_elem;
+		er->param_override_seq_host = devm_kcalloc(dev,
+				er->param_override_seq_cnt_host,
+				sizeof(*er->param_override_seq_host), GFP_KERNEL);
+		if (!er->param_override_seq_host) {
+			ret = -ENOMEM;
+			goto err_probe;
+		}
+
+		ret = of_property_read_u32_array(dev->of_node,
+				"qcom,param-override-seq-host",
+				er->param_override_seq_host,
+				er->param_override_seq_cnt_host);
+		if (ret) {
+			dev_err(dev, "qcom,param-override-seq-host read failed %d\n",
+									ret);
+			goto err_probe;
+		}
+	}
+#endif
 
 	er->ur.dev = dev;
 	platform_set_drvdata(pdev, er);

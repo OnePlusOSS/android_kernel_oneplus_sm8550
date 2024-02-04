@@ -40,6 +40,12 @@
 #define MD_SS_ENCR_DONE		('D' << 24 | 'O' << 16 | 'N' << 8 | 'E' << 0)
 #define MD_SS_ENABLED		('E' << 24 | 'N' << 16 | 'B' << 8 | 'L' << 0)
 
+#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
+//Add for customized subsystem ramdump to skip generate dump cause by SAU
+bool SKIP_GENERATE_RAMDUMP = false;
+EXPORT_SYMBOL(SKIP_GENERATE_RAMDUMP);
+#endif
+
 /**
  * struct minidump_region - Minidump region
  * @name		: Name of the region to be dumped
@@ -186,6 +192,15 @@ void qcom_minidump(struct rproc *rproc, unsigned int minidump_id, rproc_dumpfn_t
 		return;
 	}
 
+	#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
+	 //Add for customized subsystem ramdump to skip generate dump cause by SAU
+	 if (SKIP_GENERATE_RAMDUMP) {
+		dev_err(&rproc->dev, "Skip ramdump cuase by ap normal trigger.\n");
+	 	SKIP_GENERATE_RAMDUMP = false;
+	 	goto clean_minidump;;
+	 }
+	#endif
+
 	/* Get subsystem table of contents using the minidump id */
 	subsystem = &toc->subsystems[minidump_id];
 
@@ -196,6 +211,17 @@ void qcom_minidump(struct rproc *rproc, unsigned int minidump_id, rproc_dumpfn_t
 	if (subsystem->regions_baseptr == 0 ||
 	    le32_to_cpu(subsystem->status) != 1 ||
 	    le32_to_cpu(subsystem->enabled) != MD_SS_ENABLED) {
+
+		#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
+			dev_err(&rproc->dev, "qcom_minidump: modem minidump_subsystem->status is 0x%x\n",
+				(unsigned int)le32_to_cpu(subsystem->status));
+			dev_err(&rproc->dev, "qcom_minidump: modem minidump_subsystem->enabled is 0x%x\n",
+				(unsigned int)le32_to_cpu(subsystem->enabled));
+			dev_err(&rproc->dev, "qcom_minidump: modem minidump_subsystem->regions_baseptr is 0x%x\n",
+				(unsigned int)subsystem->regions_baseptr);
+			dev_err(&rproc->dev, "Continuing with full SSR dump\n");
+		#endif
+
 		return rproc_coredump(rproc);
 	}
 
