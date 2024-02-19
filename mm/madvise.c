@@ -31,6 +31,7 @@
 #include <linux/swapops.h>
 #include <linux/shmem_fs.h>
 #include <linux/mmu_notifier.h>
+#include <trace/hooks/mm.h>
 
 #include <asm/tlb.h>
 
@@ -39,6 +40,7 @@
 struct madvise_walk_private {
 	struct mmu_gather *tlb;
 	bool pageout;
+	bool can_pageout_file;
 };
 
 /*
@@ -134,10 +136,17 @@ static int replace_anon_vma_name(struct vm_area_struct *vma,
  * Caller should ensure anon_name stability by raising its refcount even when
  * anon_name belongs to a valid vma because this function might free that vma.
  */
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+static int madvise_update_vma(struct vm_area_struct *vma,
+			      struct vm_area_struct **prev, unsigned long start,
+			      unsigned long end, unsigned long new_flags,
+			      struct anon_vma_name *anon_name, bool chp)
+#else
 static int madvise_update_vma(struct vm_area_struct *vma,
 			      struct vm_area_struct **prev, unsigned long start,
 			      unsigned long end, unsigned long new_flags,
 			      struct anon_vma_name *anon_name)
+#endif
 {
 	struct mm_struct *mm = vma->vm_mm;
 	int error;
@@ -184,6 +193,10 @@ success:
 		error = replace_anon_vma_name(vma, anon_name);
 		if (error)
 			return error;
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (chp)
+			vma->android_kabi_reserved2 = THP_SWAP_PRIO_MAGIC;
+#endif
 	}
 
 	return 0;
@@ -289,6 +302,12 @@ static long madvise_willneed(struct vm_area_struct *vma,
 		return -EBADF;
 #endif
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/* Fixme: bringup hugepage in madvise for odex and oat */
+	if (file_inode(file)->may_cont_pte)
+		return 0;
+#endif
+
 	if (IS_DAX(file_inode(file))) {
 		/* no bad return value, but ignore advice */
 		return 0;
@@ -318,16 +337,21 @@ static int madvise_cold_or_pageout_pte_range(pmd_t *pmd,
 	struct madvise_walk_private *private = walk->private;
 	struct mmu_gather *tlb = private->tlb;
 	bool pageout = private->pageout;
+	bool pageout_anon_only = pageout && !private->can_pageout_file;
 	struct mm_struct *mm = tlb->mm;
 	struct vm_area_struct *vma = walk->vma;
 	pte_t *orig_pte, *pte, ptent;
 	spinlock_t *ptl;
 	struct page *page = NULL;
 	LIST_HEAD(page_list);
+	bool allow_shared = false;
+	bool abort_madvise = false;
 
-	if (fatal_signal_pending(current))
+	trace_android_vh_madvise_cold_or_pageout_abort(vma, &abort_madvise);
+	if (fatal_signal_pending(current) || abort_madvise)
 		return -EINTR;
 
+	trace_android_vh_madvise_cold_or_pageout(vma, &allow_shared);
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	if (pmd_trans_huge(*pmd)) {
 		pmd_t orig_pmd;
@@ -352,6 +376,9 @@ static int madvise_cold_or_pageout_pte_range(pmd_t *pmd,
 
 		/* Do not interfere with other mappings of this page */
 		if (page_mapcount(page) != 1)
+			goto huge_unlock;
+
+		if (pageout_anon_only && !PageAnon(page))
 			goto huge_unlock;
 
 		if (next - addr != HPAGE_PMD_SIZE) {
@@ -411,6 +438,46 @@ regular_page:
 		if (!pte_present(ptent))
 			continue;
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (pte_cont(ptent)) {
+			unsigned long next = pte_cont_addr_end(addr, end);
+
+			if (next - addr != HPAGE_CONT_PTE_SIZE) {
+				goto skip;  /* ignore PAGEOUT for partial cont_pte */
+			} else {
+				page = vm_normal_page(vma, addr, ptent);
+				if (!page)
+					goto skip;
+
+				/* Do not interfere with other mappings of this page */
+				if (page_mapcount(page) != 1)
+					goto skip;
+
+				/* Do not struggle with doublemap as we don't split hugepage to list */
+				if (PageAnon(page) && ContPteHugePageDoubleMap(page))
+					goto skip;
+
+				cont_ptep_clear_flush_young_full(vma, addr, pte);
+
+				ClearPageReferenced(page);
+				test_and_clear_page_young(page);
+				if (pageout) {
+					if (!isolate_lru_page(page)) {
+						if (PageUnevictable(page))
+							putback_lru_page(page);
+						else
+							list_add(&page->lru, &page_list);
+					}
+				} else {
+					deactivate_page(page);
+				}
+			}
+skip:
+			pte += (next - PAGE_SIZE - (addr & PAGE_MASK))/PAGE_SIZE;
+			addr = next - PAGE_SIZE;
+			continue;
+		}
+#endif
 		page = vm_normal_page(vma, addr, ptent);
 		if (!page)
 			continue;
@@ -420,7 +487,14 @@ regular_page:
 		 * are sure it's worth. Split it if we are only owner.
 		 */
 		if (PageTransCompound(page)) {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			pr_err_ratelimited("%s current:%s-%d non_cont pte thp pageout\n",
+					    __func__, current->comm, current->pid);
+			continue;
+#endif
 			if (page_mapcount(page) != 1)
+				break;
+			if (pageout_anon_only && !PageAnon(page))
 				break;
 			get_page(page);
 			if (!trylock_page(page)) {
@@ -442,8 +516,14 @@ regular_page:
 			continue;
 		}
 
-		/* Do not interfere with other mappings of this page */
-		if (page_mapcount(page) != 1)
+		/*
+		 * Do not interfere with other mappings of this page and
+		 * non-LRU page.
+		 */
+		if (!allow_shared && (!PageLRU(page) || page_mapcount(page) != 1))
+			continue;
+
+		if (pageout_anon_only && !PageAnon(page))
 			continue;
 
 		VM_BUG_ON_PAGE(PageTransCompound(page), page);
@@ -523,11 +603,13 @@ static long madvise_cold(struct vm_area_struct *vma,
 
 static void madvise_pageout_page_range(struct mmu_gather *tlb,
 			     struct vm_area_struct *vma,
-			     unsigned long addr, unsigned long end)
+			     unsigned long addr, unsigned long end,
+			     bool can_pageout_file)
 {
 	struct madvise_walk_private walk_private = {
 		.pageout = true,
 		.tlb = tlb,
+		.can_pageout_file = can_pageout_file,
 	};
 
 	tlb_start_vma(tlb, vma);
@@ -535,10 +617,8 @@ static void madvise_pageout_page_range(struct mmu_gather *tlb,
 	tlb_end_vma(tlb, vma);
 }
 
-static inline bool can_do_pageout(struct vm_area_struct *vma)
+static inline bool can_do_file_pageout(struct vm_area_struct *vma)
 {
-	if (vma_is_anonymous(vma))
-		return true;
 	if (!vma->vm_file)
 		return false;
 	/*
@@ -558,17 +638,23 @@ static long madvise_pageout(struct vm_area_struct *vma,
 {
 	struct mm_struct *mm = vma->vm_mm;
 	struct mmu_gather tlb;
+	bool can_pageout_file;
 
 	*prev = vma;
 	if (!can_madv_lru_vma(vma))
 		return -EINVAL;
 
-	if (!can_do_pageout(vma))
-		return 0;
+	/*
+	 * If the VMA belongs to a private file mapping, there can be private
+	 * dirty pages which can be paged out if even this process is neither
+	 * owner nor write capable of the file. Cache the file access check
+	 * here and use it later during page walk.
+	 */
+	can_pageout_file = can_do_file_pageout(vma);
 
 	lru_add_drain();
 	tlb_gather_mmu(&tlb, mm);
-	madvise_pageout_page_range(&tlb, vma, start_addr, end_addr);
+	madvise_pageout_page_range(&tlb, vma, start_addr, end_addr, can_pageout_file);
 	tlb_finish_mmu(&tlb);
 
 	return 0;
@@ -586,6 +672,9 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 	struct page *page;
 	int nr_swap = 0;
 	unsigned long next;
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	bool cont_pte_head = false;
+#endif
 
 	next = pmd_addr_end(addr, end);
 	if (pmd_trans_huge(*pmd))
@@ -633,13 +722,35 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 		if (PageTransCompound(page)) {
 			if (page_mapcount(page) != 1)
 				goto out;
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (!pte_cont(ptent))
+				continue;
+
+			if (pte_cont(ptent)) {
+				cont_pte_head = PageCont(page) && ContPteHugePageHead(page);
+				next = pte_cont_addr_end(addr, end);
+
+				/*ignore unaligned part or partial cont pte*/
+				if (!cont_pte_head || (next - addr != HPAGE_CONT_PTE_SIZE)) {
+					pte += (next - PAGE_SIZE - (addr & PAGE_MASK))/PAGE_SIZE;
+					addr = next - PAGE_SIZE;
+					continue;
+				} else
+					goto out_cont;
+			}
+
+#endif
 			get_page(page);
 			if (!trylock_page(page)) {
 				put_page(page);
 				goto out;
 			}
 			pte_unmap_unlock(orig_pte, ptl);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (!ContPteHugePage(page) && split_huge_page(page)) {
+#else
 			if (split_huge_page(page)) {
+#endif
 				unlock_page(page);
 				put_page(page);
 				pte_offset_map_lock(mm, pmd, addr, &ptl);
@@ -647,14 +758,18 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 			}
 			unlock_page(page);
 			put_page(page);
+
 			pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 			pte--;
 			addr -= PAGE_SIZE;
 			continue;
 		}
-
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+out_cont:
+		VM_BUG_ON_PAGE(PageTransCompound(page) && !ContPteHugePage(page), page);
+#else
 		VM_BUG_ON_PAGE(PageTransCompound(page), page);
-
+#endif
 		if (PageSwapCache(page) || PageDirty(page)) {
 			if (!trylock_page(page))
 				continue;
@@ -675,7 +790,14 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 			ClearPageDirty(page);
 			unlock_page(page);
 		}
-
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (pte_cont(ptent) && cont_pte_head) {
+			cont_pte_set_huge_pte_clean(mm, addr, pte);
+			pte += (next - PAGE_SIZE - (addr & PAGE_MASK))/PAGE_SIZE;
+			addr = next - PAGE_SIZE;
+		} else
+#endif
+		{
 		if (pte_young(ptent) || pte_dirty(ptent)) {
 			/*
 			 * Some of architecture(ex, PPC) don't update TLB
@@ -691,6 +813,10 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 			set_pte_at(mm, addr, pte, ptent);
 			tlb_remove_tlb_entry(tlb, pte, addr);
 		}
+		}
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		CHP_BUG_ON(PageCont(page) && !ContPteHugePageHead(page));
+#endif
 		mark_page_lazyfree(page);
 	}
 out:
@@ -941,10 +1067,17 @@ static long madvise_remove(struct vm_area_struct *vma,
  * will handle splitting a vm area into separate areas, each area with its own
  * behavior.
  */
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+static int madvise_vma_behavior(struct vm_area_struct *vma,
+				struct vm_area_struct **prev,
+				unsigned long start, unsigned long end,
+				unsigned long behavior, bool chp)
+#else
 static int madvise_vma_behavior(struct vm_area_struct *vma,
 				struct vm_area_struct **prev,
 				unsigned long start, unsigned long end,
 				unsigned long behavior)
+#endif
 {
 	int error;
 	struct anon_vma_name *anon_name;
@@ -961,6 +1094,26 @@ static int madvise_vma_behavior(struct vm_area_struct *vma,
 		return madvise_pageout(vma, prev, start, end);
 	case MADV_FREE:
 	case MADV_DONTNEED:
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (vma_is_chp_anonymous(vma)) {
+			if (behavior == MADV_FREE) {
+#ifndef CONFIG_CONT_PTE_HUGEPAGE_ON_QEMU
+				pr_debug_ratelimited("madv_free vma:[0x%lx - 0x%lx] start:0x%lx len:0x%lx\n",
+					 vma->vm_start, vma->vm_end, start,
+					 end - start);
+				count_vm_chp_event(CHP_MADV_FREE);
+#endif
+			} else if (!IS_ALIGNED(start, HPAGE_CONT_PTE_SIZE) ||
+				   !IS_ALIGNED((end - start), HPAGE_CONT_PTE_SIZE)) {
+#ifndef CONFIG_CONT_PTE_HUGEPAGE_ON_QEMU
+				pr_debug_ratelimited("madv_dontneed vma:[0x%lx - 0x%lx] start:0x%lx len:0x%lx\n",
+					 vma->vm_start, vma->vm_end, start,
+					 end - start);
+				count_vm_chp_event(CHP_MADV_DONTNEED_UNALIGNED);
+#endif
+			}
+		}
+#endif
 		return madvise_dontneed_free(vma, prev, start, end, behavior);
 	case MADV_POPULATE_READ:
 	case MADV_POPULATE_WRITE:
@@ -1015,8 +1168,13 @@ static int madvise_vma_behavior(struct vm_area_struct *vma,
 
 	anon_name = anon_vma_name(vma);
 	anon_vma_name_get(anon_name);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	error = madvise_update_vma(vma, prev, start, end, new_flags,
+				   anon_name, chp);
+#else
 	error = madvise_update_vma(vma, prev, start, end, new_flags,
 				   anon_name);
+#endif
 	anon_vma_name_put(anon_name);
 
 out:
@@ -1067,6 +1225,8 @@ static int madvise_inject_error(int behavior,
 			pr_info("Injecting memory failure for pfn %#lx at process virtual address %#lx\n",
 				 pfn, start);
 			ret = memory_failure(pfn, MF_COUNT_INCREASED);
+			if (ret == -EOPNOTSUPP)
+				ret = 0;
 		}
 
 		if (ret)
@@ -1138,12 +1298,19 @@ process_madvise_behavior_valid(int behavior)
  * calling the visit function on all of the existing vmas in the range.
  * Must be called with the mmap_lock held for reading or writing.
  */
-static
-int madvise_walk_vmas(struct mm_struct *mm, unsigned long start,
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+static int madvise_walk_vmas(struct mm_struct *mm, unsigned long start,
+		      unsigned long end, unsigned long arg, bool chp,
+		      int (*visit)(struct vm_area_struct *vma,
+				   struct vm_area_struct **prev, unsigned long start,
+				   unsigned long end, unsigned long arg, bool chp))
+#else
+static int madvise_walk_vmas(struct mm_struct *mm, unsigned long start,
 		      unsigned long end, unsigned long arg,
 		      int (*visit)(struct vm_area_struct *vma,
 				   struct vm_area_struct **prev, unsigned long start,
 				   unsigned long end, unsigned long arg))
+#endif
 {
 	struct vm_area_struct *vma;
 	struct vm_area_struct *prev;
@@ -1180,7 +1347,11 @@ int madvise_walk_vmas(struct mm_struct *mm, unsigned long start,
 			tmp = end;
 
 		/* Here vma->vm_start <= start < tmp <= (end|vma->vm_end). */
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		error = visit(vma, &prev, start, tmp, arg, chp);
+#else
 		error = visit(vma, &prev, start, tmp, arg);
+#endif
 		if (error)
 			return error;
 		start = tmp;
@@ -1198,10 +1369,17 @@ int madvise_walk_vmas(struct mm_struct *mm, unsigned long start,
 }
 
 #ifdef CONFIG_ANON_VMA_NAME
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+static int madvise_vma_anon_name(struct vm_area_struct *vma,
+				 struct vm_area_struct **prev,
+				 unsigned long start, unsigned long end,
+				 unsigned long anon_name, bool chp)
+#else
 static int madvise_vma_anon_name(struct vm_area_struct *vma,
 				 struct vm_area_struct **prev,
 				 unsigned long start, unsigned long end,
 				 unsigned long anon_name)
+#endif
 {
 	int error;
 
@@ -1209,9 +1387,13 @@ static int madvise_vma_anon_name(struct vm_area_struct *vma,
 	if (vma->vm_file)
 		return -EBADF;
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	error = madvise_update_vma(vma, prev, start, end, vma->vm_flags,
+				   (struct anon_vma_name *)anon_name, chp);
+#else
 	error = madvise_update_vma(vma, prev, start, end, vma->vm_flags,
 				   (struct anon_vma_name *)anon_name);
-
+#endif
 	/*
 	 * madvise() returns EAGAIN if kernel resources, such as
 	 * slab, are temporarily unavailable.
@@ -1221,8 +1403,13 @@ static int madvise_vma_anon_name(struct vm_area_struct *vma,
 	return error;
 }
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+int madvise_set_anon_name(struct mm_struct *mm, unsigned long start,
+			  unsigned long len_in, struct anon_vma_name *anon_name, bool chp)
+#else
 int madvise_set_anon_name(struct mm_struct *mm, unsigned long start,
 			  unsigned long len_in, struct anon_vma_name *anon_name)
+#endif
 {
 	unsigned long end;
 	unsigned long len;
@@ -1242,8 +1429,13 @@ int madvise_set_anon_name(struct mm_struct *mm, unsigned long start,
 	if (end == start)
 		return 0;
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	return madvise_walk_vmas(mm, start, end, (unsigned long)anon_name, chp,
+				 madvise_vma_anon_name);
+#else
 	return madvise_walk_vmas(mm, start, end, (unsigned long)anon_name,
 				 madvise_vma_anon_name);
+#endif
 }
 #endif /* CONFIG_ANON_VMA_NAME */
 /*
@@ -1358,8 +1550,13 @@ int do_madvise(struct mm_struct *mm, unsigned long start, size_t len_in, int beh
 	}
 
 	blk_start_plug(&plug);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	error = madvise_walk_vmas(mm, start, end, behavior, false,
+			madvise_vma_behavior);
+#else
 	error = madvise_walk_vmas(mm, start, end, behavior,
 			madvise_vma_behavior);
+#endif
 	blk_finish_plug(&plug);
 	if (write)
 		mmap_write_unlock(mm);

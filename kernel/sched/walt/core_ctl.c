@@ -20,6 +20,10 @@
 #include "walt.h"
 #include "trace.h"
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
+#include <../kernel/oplus_cpu/sched/sched_assist/sa_pipeline.h>
+#endif
+
 /* mask of CPUs on which there is an outstanding pause claim */
 static cpumask_t cpus_paused_by_us = { CPU_BITS_NONE };
 
@@ -31,13 +35,19 @@ struct cluster_data {
 	unsigned int		busy_up_thres[MAX_CPUS_PER_CLUSTER];
 	unsigned int		busy_down_thres[MAX_CPUS_PER_CLUSTER];
 	unsigned int		active_cpus;
+	unsigned int		active_32bit_cpus;
 	unsigned int		num_cpus;
+	unsigned int		num_32bit_cpus;
 	unsigned int		nr_not_preferred_cpus;
 	cpumask_t		cpu_mask;
+	cpumask_t		cpu_32bit_mask;
 	unsigned int		need_cpus;
+	unsigned int		need_32bit_cpus;
+	unsigned int		last_need_32bit_cpus;
 	unsigned int		task_thres;
 	unsigned int		max_nr;
 	unsigned int		nr_prev_assist;
+	unsigned int		nr_prev_assist_32bit;
 	unsigned int		nr_prev_assist_thresh;
 	s64			need_ts;
 	struct list_head	lru;
@@ -85,6 +95,7 @@ ATOMIC_NOTIFIER_HEAD(core_ctl_notifier);
 static unsigned int last_nr_big;
 
 static unsigned int get_active_cpu_count(const struct cluster_data *cluster);
+static unsigned int get_active_32bit_cpu_count(const struct cluster_data *cluster);
 static void __ref do_core_ctl(void);
 
 /* ========================= sysfs interface =========================== */
@@ -341,10 +352,13 @@ static ssize_t show_global_state(const struct cluster_data *state, char *buf)
 		count += scnprintf(buf + count, PAGE_SIZE - count,
 			"\tActive CPUs: %u\n", get_active_cpu_count(cluster));
 		count += scnprintf(buf + count, PAGE_SIZE - count,
-				"\tNeed CPUs: %u\n", cluster->need_cpus);
+				"\tNeed 64 bit CPUs: %u\n", cluster->need_cpus);
 		count += scnprintf(buf + count, PAGE_SIZE - count,
-				"\tCluster paused CPUs: %u\n",
-				   cluster_paused_cpus(cluster));
+			"\tActive 32bit CPUs: %u\n", get_active_32bit_cpu_count(cluster));
+		count += scnprintf(buf + count, PAGE_SIZE - count,
+				   "\tNeed 32bit CPUs: %u\n", cluster->need_32bit_cpus);
+		count += scnprintf(buf + count, PAGE_SIZE - count,
+			"\tCluster paused CPUs: %u\n", cluster_paused_cpus(cluster));
 		count += scnprintf(buf + count, PAGE_SIZE - count,
 				"\tBoost: %u\n", (unsigned int) cluster->boost);
 	}
@@ -392,7 +406,7 @@ static ssize_t show_not_preferred(const struct cluster_data *state, char *buf)
 	for (i = 0; i < state->num_cpus; i++) {
 		c = &per_cpu(cpu_state, i + state->first_cpu);
 		count += scnprintf(buf + count, PAGE_SIZE - count,
-				"CPU#%d: %u\n", c->cpu, c->not_preferred);
+				"%u ", c->not_preferred);
 	}
 	spin_unlock_irqrestore(&state_lock, flags);
 
@@ -482,7 +496,7 @@ static struct kobj_type ktype_core_ctl = {
 
 /* ==================== runqueue based core count =================== */
 
-static struct sched_avg_stats nr_stats[WALT_NR_CPUS];
+static struct sched_avg_stats *nr_stats;
 
 /*
  * nr_need:
@@ -515,6 +529,24 @@ static int compute_cluster_nr_need(int index)
 	}
 
 	return nr_need;
+}
+
+/* compute_cluster_nr_need for 32 bit tasks only */
+static int compute_cluster_nr_need_32bit(int index)
+{
+	int cpu;
+	struct cluster_data *cluster;
+	int nr_32bit_need = 0;
+
+	for_each_cluster(cluster, index) {
+		for_each_cpu(cpu, &cluster->cpu_32bit_mask) {
+			struct walt_rq *wrq = (struct walt_rq *) cpu_rq(cpu)->android_vendor_data1;
+
+			nr_32bit_need += wrq->walt_stats.nr_32bit_big_tasks;
+		}
+	}
+
+	return nr_32bit_need;
 }
 
 /*
@@ -636,6 +668,35 @@ static int prev_cluster_nr_need_assist(int index)
 	return need;
 }
 
+static int prev_cluster_nr_need_assist_32bit(int index)
+{
+	int need_32bit = 0;
+	int cpu;
+	struct cluster_data *prev_cluster;
+
+	if (index == 0)
+		return 0;
+
+	index--;
+	prev_cluster = &cluster_state[index];
+
+	/*
+	 * Next cluster should not assist, while there are paused cpus
+	 * in this cluster.
+	 */
+	if (cluster_paused_cpus(prev_cluster))
+		return 0;
+
+	/* add in the cpu's 32bit misfit need */
+	for_each_cpu(cpu, &prev_cluster->cpu_32bit_mask) {
+		struct walt_rq *wrq = (struct walt_rq *) cpu_rq(cpu)->android_vendor_data1;
+
+		need_32bit += wrq->walt_stats.nr_32bit_big_tasks;
+	}
+
+	return need_32bit;
+}
+
 /*
  * This is only implemented for min capacity cluster.
  *
@@ -686,7 +747,7 @@ static void update_running_avg(void)
 	unsigned long flags;
 	int big_avg = 0;
 
-	sched_get_nr_running_avg(nr_stats);
+	nr_stats = sched_get_nr_running_avg();
 
 	spin_lock_irqsave(&state_lock, flags);
 	for_each_cluster(cluster, index) {
@@ -701,6 +762,10 @@ static void update_running_avg(void)
 		cluster->nrrun = nr_need + prev_misfit_need;
 		cluster->max_nr = compute_cluster_max_nr(index);
 		cluster->nr_prev_assist = prev_cluster_nr_need_assist(index);
+
+		cluster->last_need_32bit_cpus = cluster->need_32bit_cpus;
+		cluster->need_32bit_cpus = compute_cluster_nr_need_32bit(index);
+		cluster->nr_prev_assist_32bit = prev_cluster_nr_need_assist_32bit(index);
 
 		cluster->strict_nrrun = compute_cluster_nr_strict_need(index);
 
@@ -764,6 +829,20 @@ static unsigned int apply_limits(const struct cluster_data *cluster,
 	return min(max(cluster->min_cpus, need_cpus), cluster->max_cpus);
 }
 
+static unsigned int apply_limits_32bit(const struct cluster_data *cluster,
+				       unsigned int need_cpus)
+{
+	return min(need_cpus, cluster->num_32bit_cpus);
+}
+
+static unsigned int get_active_32bit_cpu_count(const struct cluster_data *cluster)
+{
+	cpumask_t cpus;
+
+	cpumask_andnot(&cpus, &cluster->cpu_32bit_mask, cpu_halt_mask);
+	return cpumask_weight(&cpus);
+}
+
 static unsigned int get_active_cpu_count(const struct cluster_data *cluster)
 {
 	cpumask_t cpus;
@@ -775,6 +854,13 @@ static unsigned int get_active_cpu_count(const struct cluster_data *cluster)
 static bool is_active(const struct cpu_data *state)
 {
 	return cpu_active(state->cpu) && !cpu_halted(state->cpu);
+}
+
+static bool adjustment_possible_32bit(const struct cluster_data *cluster,
+							unsigned int need)
+{
+	return (need < cluster->active_32bit_cpus || (need > cluster->active_32bit_cpus &&
+						cluster_paused_cpus(cluster)));
 }
 
 static bool adjustment_possible(const struct cluster_data *cluster,
@@ -857,9 +943,71 @@ unlock:
 	return adj_now && adj_possible;
 }
 
+/*
+ * if a 32bit capable cluster needs 32 bit cpus, and there are
+ * insufficient 32bit cpus to address the need, return true.
+ */
+static bool eval_need_32bit(struct cluster_data *cluster)
+{
+	unsigned long flags;
+	unsigned int need_cpus, last_need;
+	bool adj_now = false;
+	bool adj_possible = false;
+	unsigned int new_need;
+	s64 now, elapsed;
+
+	if (unlikely(!cluster->inited))
+		return false;
+
+	if (!cluster->num_32bit_cpus)
+		return false;
+
+	spin_lock_irqsave(&state_lock, flags);
+
+	last_need = cluster->last_need_32bit_cpus;
+	need_cpus = cluster->need_32bit_cpus + cluster->nr_prev_assist_32bit;
+	cluster->active_32bit_cpus = get_active_32bit_cpu_count(cluster);
+
+	new_need = apply_limits_32bit(cluster, need_cpus);
+
+	now = ktime_to_ms(ktime_get());
+
+	if (need_cpus > cluster->active_32bit_cpus) {
+		adj_now = true;
+	} else {
+		/*
+		 * When there is no change in need and there are no more
+		 * active CPUs than currently needed, just update the
+		 * need time stamp and return.
+		 */
+		if (new_need == last_need && new_need == cluster->active_32bit_cpus) {
+			cluster->need_ts = now;
+			adj_now = false;
+			goto unlock;
+		}
+
+		elapsed = now - cluster->need_ts;
+		adj_now = elapsed >= cluster->offline_delay_ms;
+	}
+
+	if (adj_now) {
+		adj_possible = adjustment_possible_32bit(cluster, new_need);
+		cluster->need_ts = now;
+		cluster->need_cpus = new_need;
+	}
+
+unlock:
+	trace_core_ctl_eval_need_32bit(cluster->first_cpu, last_need, new_need,
+				cluster->active_32bit_cpus, adj_now, adj_possible,
+				adj_now && adj_possible, cluster->need_ts);
+	spin_unlock_irqrestore(&state_lock, flags);
+
+	return adj_now && adj_possible;
+}
+
 static void apply_need(struct cluster_data *cluster)
 {
-	if (eval_need(cluster))
+	if (eval_need(cluster) || eval_need_32bit(cluster))
 		wake_up_core_ctl_thread();
 }
 
@@ -954,6 +1102,14 @@ static void core_ctl_call_notifier(void)
 	atomic_notifier_call_chain(&core_ctl_notifier, 0, &ndata);
 }
 
+/*
+ * sched_get_nr_running_avg will wipe out previous statistics and
+ * update it to the values computed since the last call.
+ *
+ * core_ctl_check assumes that the statistics are stable, hence
+ * window based. Therefore core_ctl_check must only be called from
+ * window rollover, or walt_irq_work for not migration.
+ */
 void core_ctl_check(u64 window_start)
 {
 	int cpu;
@@ -987,7 +1143,7 @@ void core_ctl_check(u64 window_start)
 	update_running_avg();
 
 	for_each_cluster(cluster, index)
-		wakeup |= eval_need(cluster);
+		wakeup |= (eval_need(cluster) || eval_need_32bit(cluster));
 
 	if (wakeup)
 		do_core_ctl();
@@ -1001,7 +1157,7 @@ static void move_cpu_lru(struct cpu_data *cpu_data)
 	list_add_tail(&cpu_data->sib, &cpu_data->cluster->lru);
 }
 
-static void try_to_pause(struct cluster_data *cluster, unsigned int need,
+static void try_to_pause(struct cluster_data *cluster, unsigned int need, unsigned int need_32bit,
 			 struct cpumask *pause_cpus)
 {
 	struct cpu_data *c, *tmp;
@@ -1009,6 +1165,7 @@ static void try_to_pause(struct cluster_data *cluster, unsigned int need,
 	unsigned int num_cpus = cluster->num_cpus;
 	unsigned int nr_pending = 0, active_cpus = cluster->active_cpus;
 	bool first_pass = cluster->nr_not_preferred_cpus;
+	unsigned int total_need = min(cluster->num_cpus, need + need_32bit);
 
 	/*
 	 * Protect against entry being removed (and added at tail) by other
@@ -1023,7 +1180,7 @@ static void try_to_pause(struct cluster_data *cluster, unsigned int need,
 			continue;
 		if (!is_active(c))
 			continue;
-		if (active_cpus - nr_pending == need)
+		if (active_cpus - nr_pending == total_need)
 			break;
 		/* Don't pause busy CPUs. */
 		if (c->is_busy)
@@ -1079,12 +1236,16 @@ unlock:
 }
 
 static int __try_to_resume(struct cluster_data *cluster, unsigned int need,
-			   bool force, struct cpumask *unpause_cpus)
+			   bool force, struct cpumask *unpause_cpus, unsigned int *nr_pending_32bit)
 {
 	struct cpu_data *c, *tmp;
 	unsigned long flags;
 	unsigned int num_cpus = cluster->num_cpus;
 	unsigned int nr_pending = 0, active_cpus = cluster->active_cpus;
+	unsigned int active_cpus_32bit = cluster->active_32bit_cpus;
+	unsigned int need_32bit_cpus = cluster->need_32bit_cpus + cluster->nr_prev_assist_32bit;
+
+	*nr_pending_32bit = 0;
 
 	/*
 	 * Protect against entry being removed (and added at tail) by other
@@ -1094,19 +1255,21 @@ static int __try_to_resume(struct cluster_data *cluster, unsigned int need,
 	list_for_each_entry_safe(c, tmp, &cluster->lru, sib) {
 		if (!num_cpus--)
 			break;
-
 		if (!cpumask_test_cpu(c->cpu, &cpus_paused_by_us))
 			continue;
 		if ((cpu_active(c->cpu) && !cpu_halted(c->cpu)) ||
 			(!force && c->not_preferred))
 			continue;
-		if (active_cpus + nr_pending == need)
+		if ((active_cpus + nr_pending >= need) &&
+			(active_cpus_32bit + *nr_pending_32bit >= need_32bit_cpus))
 			break;
 
 		pr_debug("Trying to resume CPU%u\n", c->cpu);
 
-		cpumask_set_cpu(c->cpu, unpause_cpus);
+		if (cpumask_test_cpu(c->cpu, &cluster->cpu_32bit_mask))
+			(*nr_pending_32bit)++;
 		nr_pending++;
+		cpumask_set_cpu(c->cpu, unpause_cpus);
 		move_cpu_lru(c);
 	}
 
@@ -1115,24 +1278,27 @@ static int __try_to_resume(struct cluster_data *cluster, unsigned int need,
 	return nr_pending;
 }
 
-static void try_to_resume(struct cluster_data *cluster, unsigned int need,
+static void try_to_resume(struct cluster_data *cluster, unsigned int need, unsigned int need_32bit,
 			  struct cpumask *unpause_cpus)
 {
 	bool force_use_non_preferred = false;
 	unsigned int nr_pending;
+	unsigned int nr_pending_32bit;
 
 	/*
 	 * __try_to_resume() marks the CPUs to be resumed but active_cpus
 	 * won't be reflected yet. So use the nr_pending to adjust active
 	 * count.
 	 */
-	nr_pending = __try_to_resume(cluster, need, force_use_non_preferred, unpause_cpus);
+	nr_pending = __try_to_resume(cluster, need, force_use_non_preferred, unpause_cpus,
+				     &nr_pending_32bit);
 
-	if (cluster->active_cpus + nr_pending == need)
+	if (cluster->active_cpus + nr_pending == need &&
+	    cluster->active_32bit_cpus + nr_pending_32bit == need_32bit)
 		return;
 
 	force_use_non_preferred = true;
-	__try_to_resume(cluster, need, force_use_non_preferred, unpause_cpus);
+	__try_to_resume(cluster, need, force_use_non_preferred, unpause_cpus, &nr_pending_32bit);
 }
 
 /*
@@ -1155,7 +1321,7 @@ static void core_ctl_pause_cpus(struct cpumask *cpus_to_pause)
 	cpumask_copy(&saved_cpus, cpus_to_pause);
 
 	if (cpumask_any(cpus_to_pause) < nr_cpu_ids) {
-		if (walt_halt_cpus(cpus_to_pause) < 0)
+		if (walt_halt_cpus(cpus_to_pause, PAUSE_CORE_CTL) < 0)
 			pr_debug("core_ctl pause operation failed cpus=%*pbl paused_by_us=%*pbl\n",
 				 cpumask_pr_args(cpus_to_pause),
 				 cpumask_pr_args(&cpus_paused_by_us));
@@ -1184,7 +1350,7 @@ static void core_ctl_resume_cpus(struct cpumask *cpus_to_unpause)
 	cpumask_copy(&saved_cpus, cpus_to_unpause);
 
 	if (cpumask_any(cpus_to_unpause) < nr_cpu_ids) {
-		if (walt_start_cpus(cpus_to_unpause) < 0)
+		if (walt_start_cpus(cpus_to_unpause, PAUSE_CORE_CTL) < 0)
 			pr_debug("core_ctl resume operation failed cpus=%*pbl paused_by_us=%*pbl\n",
 				 cpumask_pr_args(cpus_to_unpause),
 				 cpumask_pr_args(&cpus_paused_by_us));
@@ -1197,24 +1363,28 @@ static void __ref do_core_ctl(void)
 {
 	struct cluster_data *cluster;
 	unsigned int index = 0;
-	unsigned int need;
+	unsigned int need, need_32bit;
 	cpumask_t cpus_to_pause = { CPU_BITS_NONE };
 	cpumask_t cpus_to_unpause = { CPU_BITS_NONE };
 
 	for_each_cluster(cluster, index) {
 
 		cluster->active_cpus = get_active_cpu_count(cluster);
+		cluster->active_32bit_cpus = get_active_32bit_cpu_count(cluster);
 		need = apply_limits(cluster, cluster->need_cpus);
 
-		if (adjustment_possible(cluster, need)) {
-			pr_debug("Trying to adjust group %u from %u to %u\n",
-				 cluster->first_cpu, cluster->active_cpus, need);
+		if (cluster->num_32bit_cpus)
+			need_32bit = cluster->need_32bit_cpus + cluster->nr_prev_assist_32bit;
+		else
+			need_32bit = 0;
 
-			if (cluster->active_cpus > need)
-				try_to_pause(cluster, need, &cpus_to_pause);
+		if (adjustment_possible(cluster, need) ||
+		    adjustment_possible_32bit(cluster, need_32bit)) {
+			if (cluster->active_cpus > need + need_32bit)
+				try_to_pause(cluster, need, need_32bit, &cpus_to_pause);
 
-			else if (cluster->active_cpus < need)
-				try_to_resume(cluster, need, &cpus_to_unpause);
+			else if (cluster->active_cpus < need + need_32bit)
+				try_to_resume(cluster, need, need_32bit, &cpus_to_unpause);
 		}
 	}
 
@@ -1287,6 +1457,8 @@ static int cluster_init(const struct cpumask *mask)
 
 	cpumask_copy(&cluster->cpu_mask, mask);
 	cluster->num_cpus = cpumask_weight(mask);
+	cpumask_and(&cluster->cpu_32bit_mask, mask, system_32bit_el0_cpumask());
+	cluster->num_32bit_cpus = cpumask_weight(&cluster->cpu_32bit_mask);
 	if (cluster->num_cpus > MAX_CPUS_PER_CLUSTER) {
 		pr_err("HW configuration not supported\n");
 		return -EINVAL;
@@ -1295,6 +1467,8 @@ static int cluster_init(const struct cpumask *mask)
 	cluster->min_cpus = 1;
 	cluster->max_cpus = cluster->num_cpus;
 	cluster->need_cpus = cluster->num_cpus;
+	cluster->need_32bit_cpus = cluster->num_32bit_cpus;
+	cluster->last_need_32bit_cpus = cluster->num_32bit_cpus;
 	cluster->offline_delay_ms = 100;
 	cluster->task_thres = UINT_MAX;
 	cluster->nr_prev_assist_thresh = UINT_MAX;
@@ -1315,6 +1489,7 @@ static int cluster_init(const struct cpumask *mask)
 		list_add_tail(&state->sib, &cluster->lru);
 	}
 	cluster->active_cpus = get_active_cpu_count(cluster);
+	cluster->active_32bit_cpus = get_active_32bit_cpu_count(cluster);
 
 	cluster->inited = true;
 
@@ -1330,6 +1505,8 @@ int core_ctl_init(void)
 
 	spin_lock_init(&core_ctl_pending_lock);
 
+	nr_stats = sched_get_nr_running_avg();
+
 	/* initialize our single kthread, after spin lock init */
 	core_ctl_thread = kthread_run(try_core_ctl, NULL, "core_ctl");
 
@@ -1343,6 +1520,10 @@ int core_ctl_init(void)
 		if (ret)
 			pr_warn("unable to create core ctl group: %d\n", ret);
 	}
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
+	oplus_core_ctl_set_boost = core_ctl_set_boost;
+#endif
 
 	initialized = true;
 

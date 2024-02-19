@@ -10,9 +10,16 @@
 #include <linux/err.h>
 #include "qcom_dynamic_page_pool.h"
 
+#ifdef CONFIG_OPLUS_FEATURE_MM_BOOSTPOOL
+#include "mm_boost_pool/oplus_boost_pool.h"
+#endif
+
 struct qcom_system_heap {
 	int uncached;
 	struct dynamic_page_pool **pool_list;
+#ifdef CONFIG_OPLUS_FEATURE_MM_BOOSTPOOL
+	struct dynamic_boost_pool *boost_pool;
+#endif
 };
 
 #ifdef CONFIG_QCOM_DMABUF_HEAPS_SYSTEM

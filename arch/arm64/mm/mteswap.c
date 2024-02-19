@@ -12,7 +12,7 @@ static DEFINE_XARRAY(mte_pages);
 void *mte_allocate_tag_storage(void)
 {
 	/* tags granule is 16 bytes, 2 tags stored per byte */
-	return kmalloc(PAGE_SIZE / 16 / 2, GFP_KERNEL);
+	return kmalloc(MTE_PAGE_TAG_STORAGE, GFP_KERNEL);
 }
 
 void mte_free_tag_storage(char *storage)
@@ -62,7 +62,12 @@ bool mte_restore_tags(swp_entry_t entry, struct page *page)
 	 * the new page->flags are visible before the tags were updated.
 	 */
 	smp_wmb();
-	mte_restore_page_tags(page_address(page), tags);
+	/*
+	 * Test PG_mte_tagged again in case it was racing with another
+	 * set_pte_at().
+	 */
+	if (!test_and_set_bit(PG_mte_tagged, &page->flags))
+		mte_restore_page_tags(page_address(page), tags);
 
 	return true;
 }

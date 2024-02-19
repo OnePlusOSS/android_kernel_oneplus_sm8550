@@ -106,19 +106,17 @@ TRACE_EVENT(sched_update_history,
 		__entry->cpu		= rq->cpu;
 	),
 
-	TP_printk("%d (%s): runtime %u samples %d event %s demand %u (hist: %u %u %u %u %u %u %u %u) (hist_util: %u %u %u %u %u %u %u %u) coloc_demand %u pred_demand_scaled %u cpu %d nr_big %u",
+	TP_printk("%d (%s): runtime %u samples %d event %s demand %u (hist: %u %u %u %u %u) (hist_util: %u %u %u %u %u) coloc_demand %u pred_demand_scaled %u cpu %d nr_big %u",
 		__entry->pid, __entry->comm,
 		__entry->runtime, __entry->samples,
 		task_event_names[__entry->evt],
 		__entry->demand,
 		__entry->hist[0], __entry->hist[1],
 		__entry->hist[2], __entry->hist[3],
-		__entry->hist[4], __entry->hist[5],
-		__entry->hist[6], __entry->hist[7],
+		__entry->hist[4],
 		__entry->hist_util[0], __entry->hist_util[1],
 		__entry->hist_util[2], __entry->hist_util[3],
-		__entry->hist_util[4], __entry->hist_util[5],
-		__entry->hist_util[6], __entry->hist_util[7],
+		__entry->hist_util[4],
 		__entry->coloc_demand, __entry->pred_demand_scaled,
 		__entry->cpu, __entry->nr_big_tasks)
 );
@@ -516,6 +514,39 @@ TRACE_EVENT(core_ctl_eval_need,
 		  __entry->updated, __entry->need_ts)
 );
 
+TRACE_EVENT(core_ctl_eval_need_32bit,
+
+	TP_PROTO(unsigned int cpu, unsigned int last_need,
+		unsigned int new_need, unsigned int active_cpus,
+		unsigned int adj_now, unsigned int adj_possible,
+		unsigned int updated, s64 need_ts),
+	TP_ARGS(cpu, last_need, new_need, active_cpus, adj_now, adj_possible, updated, need_ts),
+	TP_STRUCT__entry(
+		__field(u32, cpu)
+		__field(u32, last_need)
+		__field(u32, new_need)
+		__field(u32, active_cpus)
+		__field(u32, adj_now)
+		__field(u32, adj_possible)
+		__field(u32, updated)
+		__field(s64, need_ts)
+	),
+	TP_fast_assign(
+		__entry->cpu		= cpu;
+		__entry->last_need	= last_need;
+		__entry->new_need	= new_need;
+		__entry->active_cpus	= active_cpus;
+		__entry->adj_now	= adj_now;
+		__entry->adj_possible	= adj_possible;
+		__entry->updated	= updated;
+		__entry->need_ts	= need_ts;
+	),
+	TP_printk("cpu=%u last_need=%u new_need=%u active_cpus=%u adj_now=%u adj_possible=%u updated=%u need_ts=%llu",
+		  __entry->cpu,	__entry->last_need, __entry->new_need,
+		  __entry->active_cpus, __entry->adj_now, __entry->adj_possible,
+		  __entry->updated, __entry->need_ts)
+);
+
 TRACE_EVENT(core_ctl_set_busy,
 
 	TP_PROTO(unsigned int cpu, unsigned int busy,
@@ -732,6 +763,66 @@ TRACE_EVENT(waltgov_util_update,
 		      __entry->max_cap, __entry->nl,
 		      __entry->pl, __entry->rtgb, __entry->flags)
 );
+
+#ifdef CONFIG_OPLUS_FEATURE_SUGOV_TL
+TRACE_EVENT(waltgov_next_freq_tl,
+	    TP_PROTO(unsigned int cpu, unsigned long util, unsigned long max,
+		     unsigned int freq, unsigned int laf, unsigned int prev_freq),
+	    TP_ARGS(cpu, util, max, freq, laf, prev_freq),
+	    TP_STRUCT__entry(
+		    __field(	unsigned int,	cpu)
+		    __field(	unsigned long,	util)
+		    __field(	unsigned long,	max)
+		    __field(	unsigned int,	freq)
+		    __field(	unsigned int,	laf)
+		    __field(	unsigned int,	prev_freq)
+	    ),
+	    TP_fast_assign(
+		    __entry->cpu = cpu;
+		    __entry->util = util;
+		    __entry->max = max;
+		    __entry->freq = freq;
+		    __entry->laf = laf;
+		    __entry->prev_freq = prev_freq;
+	    ),
+	    TP_printk("cpu=%u util=%lu max=%lu freq=%u laf=%u, prev_freq=%u",
+		      __entry->cpu,
+		      __entry->util,
+		      __entry->max,
+		      __entry->freq,
+		      __entry->laf,
+		      __entry->prev_freq)
+);
+
+TRACE_EVENT(choose_freq,
+	    TP_PROTO(unsigned int freq, unsigned int prevfreq, unsigned int freqmax,
+		     unsigned int freqmin, unsigned int tl, int index),
+	    TP_ARGS(freq, prevfreq, freqmax, freqmin, tl, index),
+	    TP_STRUCT__entry(
+		    __field(unsigned int, freq)
+		    __field(unsigned int, prevfreq)
+		    __field(unsigned int, freqmax)
+		    __field(unsigned int, freqmin)
+		    __field(unsigned int, tl)
+		    __field(int, index)
+	    ),
+	    TP_fast_assign(
+		    __entry->freq = freq;
+		    __entry->prevfreq = prevfreq;
+		    __entry->freqmax = freqmax;
+		    __entry->freqmin = freqmin;
+		    __entry->tl = tl;
+		    __entry->index = index;
+	    ),
+	    TP_printk("freq=%u prevfreq=%u freqmax=%u freqmin=%u tl=%u index=%d",
+		      __entry->freq,
+		      __entry->prevfreq,
+		      __entry->freqmax,
+		      __entry->freqmin,
+		      __entry->tl,
+		      __entry->index)
+);
+#endif
 
 TRACE_EVENT(waltgov_next_freq,
 	    TP_PROTO(unsigned int cpu, unsigned long util, unsigned long max, unsigned int raw_freq,
@@ -950,6 +1041,7 @@ TRACE_EVENT(sched_cpu_util,
 		__field(unsigned int,	nr_rtg_high_prio_tasks)
 		__field(u64,	prs_gprs)
 		__field(unsigned int,	lowest_mask)
+		__field(unsigned long,	thermal_pressure)
 	),
 
 	TP_fast_assign(
@@ -974,16 +1066,17 @@ TRACE_EVENT(sched_cpu_util,
 			__entry->lowest_mask	= 0;
 		else
 			__entry->lowest_mask	= cpumask_bits(lowest_mask)[0];
+		__entry->thermal_pressure	= arch_scale_thermal_pressure(cpu);
 	),
 
-	TP_printk("cpu=%d nr_running=%d cpu_util=%ld cpu_util_cum=%ld capacity_curr=%lu capacity=%lu capacity_orig=%lu idle_exit_latency=%u irqload=%llu online=%u, inactive=%u, halted=%u, reserved=%u, high_irq_load=%u nr_rtg_hp=%u prs_gprs=%llu lowest_mask=0x%x",
+	TP_printk("cpu=%d nr_running=%d cpu_util=%ld cpu_util_cum=%ld capacity_curr=%lu capacity=%lu capacity_orig=%lu idle_exit_latency=%u irqload=%llu online=%u, inactive=%u, halted=%u, reserved=%u, high_irq_load=%u nr_rtg_hp=%u prs_gprs=%llu lowest_mask=0x%x thermal_pressure=%llu",
 		__entry->cpu, __entry->nr_running, __entry->cpu_util,
 		__entry->cpu_util_cum, __entry->capacity_curr,
 		__entry->capacity, __entry->capacity_orig,
 		__entry->idle_exit_latency, __entry->irqload, __entry->online,
 		__entry->inactive, __entry->halted, __entry->reserved, __entry->high_irq_load,
 		__entry->nr_rtg_high_prio_tasks, __entry->prs_gprs,
-		__entry->lowest_mask)
+		__entry->lowest_mask, __entry->thermal_pressure)
 );
 
 TRACE_EVENT(sched_compute_energy,
@@ -1054,6 +1147,28 @@ TRACE_EVENT(sched_compute_energy,
 		__entry->cluster_first_cpu1, __entry->s1, __entry->m1, __entry->c1,
 		__entry->cluster_first_cpu2, __entry->s2, __entry->m2, __entry->c2)
 )
+
+TRACE_EVENT(sched_select_task_rt,
+
+	TP_PROTO(struct task_struct *p, int fastpath),
+
+	TP_ARGS(p, fastpath),
+
+	TP_STRUCT__entry(
+		__field(int,		pid)
+		__array(char,		comm, TASK_COMM_LEN)
+		__field(int,		fastpath)
+	),
+
+	TP_fast_assign(
+		__entry->pid			= p->pid;
+		memcpy(__entry->comm, p->comm, TASK_COMM_LEN);
+		__entry->fastpath		= fastpath;
+	),
+
+	TP_printk("pid=%d comm=%s fastpath=%u",
+		__entry->pid, __entry->comm, __entry->fastpath)
+);
 
 TRACE_EVENT(sched_task_util,
 
@@ -1441,14 +1556,15 @@ TRACE_EVENT(sched_task_handler,
 
 TRACE_EVENT(update_cpu_capacity,
 
-	TP_PROTO(int cpu, unsigned long rt_pressure, unsigned long capacity),
+	TP_PROTO(int cpu, unsigned long fmax_capacity,
+		unsigned long rq_cpu_capacity_orig),
 
-	TP_ARGS(cpu, rt_pressure, capacity),
+	TP_ARGS(cpu, fmax_capacity, rq_cpu_capacity_orig),
 
 	TP_STRUCT__entry(
 		__field(int, cpu)
-		__field(unsigned long, rt_pressure)
-		__field(unsigned long, capacity)
+		__field(unsigned long, fmax_capacity)
+		__field(unsigned long, rq_cpu_capacity_orig)
 		__field(unsigned long, arch_capacity)
 		__field(unsigned long, thermal_cap)
 		__field(unsigned long, max_possible_freq)
@@ -1459,8 +1575,8 @@ TRACE_EVENT(update_cpu_capacity,
 		struct walt_sched_cluster *cluster = cpu_cluster(cpu);
 
 		__entry->cpu = cpu;
-		__entry->rt_pressure = rt_pressure;
-		__entry->capacity = capacity;
+		__entry->fmax_capacity = fmax_capacity;
+		__entry->rq_cpu_capacity_orig = rq_cpu_capacity_orig;
 		__entry->arch_capacity = arch_scale_cpu_capacity(cpu);
 		__entry->thermal_cap = arch_scale_cpu_capacity(cpu) -
 					arch_scale_thermal_pressure(cpu);
@@ -1468,11 +1584,11 @@ TRACE_EVENT(update_cpu_capacity,
 		__entry->max_possible_freq = cluster->max_possible_freq;
 	),
 
-	TP_printk("cpu=%d arch_capacity=%lu thermal_cap=%lu rt_pressure=%lu max_freq=%lu max_possible_freq=%lu capacity=%lu",
+	TP_printk("cpu=%d arch_capacity=%lu thermal_cap=%lu fmax_capacity=%lu max_freq=%lu max_possible_freq=%lu rq_cpu_capacity_orig=%lu",
 			__entry->cpu, __entry->arch_capacity,
-			__entry->thermal_cap, __entry->rt_pressure,
+			__entry->thermal_cap, __entry->fmax_capacity,
 			__entry->max_freq, __entry->max_possible_freq,
-			__entry->capacity)
+			__entry->rq_cpu_capacity_orig)
 );
 
 #endif /* _TRACE_WALT_H */

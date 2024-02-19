@@ -319,7 +319,7 @@ static void die_kernel_fault(const char *msg, unsigned long addr,
 	show_pte(addr);
 	die("Oops", regs, esr);
 	bust_spinlocks(0);
-	do_exit(SIGKILL);
+	make_task_dead(SIGKILL);
 }
 
 #ifdef CONFIG_KASAN_HW_TAGS
@@ -617,29 +617,29 @@ static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 		count_vm_spf_event(SPF_ABORT_ODD);
 		goto spf_abort;
 	}
-	rcu_read_lock();
-	vma = __find_vma(mm, addr);
-	if (!vma || vma->vm_start > addr) {
-		rcu_read_unlock();
+	vma = get_vma(mm, addr);
+	if (!vma) {
 		count_vm_spf_event(SPF_ABORT_UNMAPPED);
 		goto spf_abort;
 	}
 	if (!vma_can_speculate(vma, mm_flags)) {
-		rcu_read_unlock();
+		put_vma(vma);
 		count_vm_spf_event(SPF_ABORT_NO_SPECULATE);
 		goto spf_abort;
 	}
 	pvma = *vma;
-	rcu_read_unlock();
-	if (!mmap_seq_read_check(mm, seq, SPF_ABORT_VMA_COPY))
+	if (!mmap_seq_read_check(mm, seq, SPF_ABORT_VMA_COPY)) {
+		put_vma(vma);
 		goto spf_abort;
-	vma = &pvma;
-	if (!(vma->vm_flags & vm_flags)) {
+	}
+	if (!(pvma.vm_flags & vm_flags)) {
+		put_vma(vma);
 		count_vm_spf_event(SPF_ABORT_ACCESS_ERROR);
 		goto spf_abort;
 	}
-	fault = do_handle_mm_fault(vma, addr & PAGE_MASK,
+	fault = do_handle_mm_fault(&pvma, addr & PAGE_MASK,
 			mm_flags | FAULT_FLAG_SPECULATIVE, seq, regs);
+	put_vma(vma);
 
 	/* Quick path to respond to signals */
 	if (fault_signal_pending(fault, regs)) {
@@ -779,7 +779,11 @@ static int do_alignment_fault(unsigned long far, unsigned int esr,
 
 static int do_bad(unsigned long far, unsigned int esr, struct pt_regs *regs)
 {
-	return 1; /* "fault" */
+	unsigned long addr = untagged_addr(far);
+	int ret = 1;
+
+	trace_android_vh_handle_tlb_conf(addr, esr, &ret);
+	return ret;
 }
 
 static int do_sea(unsigned long far, unsigned int esr, struct pt_regs *regs)

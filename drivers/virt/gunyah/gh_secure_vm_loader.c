@@ -8,6 +8,9 @@
 #include <linux/soc/qcom/mdt_loader.h>
 #include <linux/gunyah/gh_rm_drv.h>
 #include <linux/platform_device.h>
+#include <linux/of_reserved_mem.h>
+#include <linux/dma-mapping.h>
+#include <linux/dma-direct.h>
 #include <linux/of_address.h>
 #include <linux/qcom_scm.h>
 #include <linux/firmware.h>
@@ -34,6 +37,7 @@ struct gh_sec_vm_dev {
 	ssize_t fw_size;
 	int pas_id;
 	int vmid;
+	bool is_static;
 };
 
 const static struct {
@@ -79,7 +83,7 @@ static struct gh_sec_vm_dev *get_sec_vm_dev_by_name(const char *vm_name)
 }
 
 static u64 gh_sec_load_metadata(struct gh_sec_vm_dev *vm_dev,
-					void *mdata, size_t mdata_size)
+					void *mdata, size_t mdata_size_act)
 {
 	struct device *dev = vm_dev->dev;
 	const struct elf32_phdr *phdrs;
@@ -88,6 +92,7 @@ static u64 gh_sec_load_metadata(struct gh_sec_vm_dev *vm_dev,
 	bool relocatable = false;
 	void *metadata_start;
 	u64 image_start_addr = 0;
+	size_t mdata_size = 0;
 	u64 image_end_addr;
 	u64 image_size = 0;
 	u32 max_paddr = 0;
@@ -97,7 +102,12 @@ static u64 gh_sec_load_metadata(struct gh_sec_vm_dev *vm_dev,
 	ehdr = (struct elf32_hdr *)mdata;
 	phdrs = (struct elf32_phdr *)(ehdr + 1);
 
-	mdata_size = PAGE_ROUND_UP(mdata_size);
+	mdata_size = PAGE_ROUND_UP(mdata_size_act);
+	if (mdata_size < mdata_size_act) {
+		dev_err(dev, "Overflow detected while calculating metadata size\"%s\"\n",
+			vm_dev->vm_name);
+		return 0;
+	}
 
 	/* Calculate total image size */
 	for (i = 0; i < ehdr->e_phnum; i++) {
@@ -140,7 +150,7 @@ static u64 gh_sec_load_metadata(struct gh_sec_vm_dev *vm_dev,
 
 	if (image_end_addr <= (image_start_addr + moffset)) {
 		metadata_start = vm_dev->fw_virt + moffset;
-		memcpy(metadata_start, mdata, mdata_size);
+		memcpy(metadata_start, mdata, mdata_size_act);
 		return moffset;
 	}
 
@@ -215,17 +225,35 @@ static int gh_sec_vm_loader_load_fw(struct gh_sec_vm_dev *vm_dev,
 							struct gh_vm *vm)
 {
 	enum gh_vm_names vm_name;
+	dma_addr_t dma_handle;
 	struct device *dev;
 	int ret = 0;
+	void *virt;
 
 	dev = vm_dev->dev;
 
 	vm_name = get_gh_vm_name(vm_dev->vm_name);
 
+	if (!vm_dev->is_static) {
+		virt = dma_alloc_coherent(dev, vm_dev->fw_size, &dma_handle,
+				GFP_KERNEL);
+		if (!virt) {
+			ret = -ENOMEM;
+			dev_err(dev, "Couldn't allocate cma memory for %s %d\n",
+						vm_dev->vm_name, ret);
+			return ret;
+		}
+
+		vm_dev->fw_virt = virt;
+		vm_dev->fw_phys = dma_to_phys(dev, dma_handle);
+	}
+
 	ret = gh_rm_vm_alloc_vmid(vm_name, &vm_dev->vmid);
 	if (ret < 0) {
 		dev_err(dev, "Couldn't allocate VMID for %s %d\n",
 						vm_dev->vm_name, ret);
+		if (!vm_dev->is_static)
+			dma_free_coherent(dev, vm_dev->fw_size, virt, dma_handle);
 		return ret;
 	}
 
@@ -304,7 +332,6 @@ long gh_vm_ioctl_get_fw_name(struct gh_vm *vm, unsigned long arg)
 	return 0;
 }
 
-
 int gh_secure_vm_loader_reclaim_fw(struct gh_vm *vm)
 {
 	struct gh_sec_vm_dev *sec_vm_dev;
@@ -323,12 +350,18 @@ int gh_secure_vm_loader_reclaim_fw(struct gh_vm *vm)
 
 	ret = gh_reclaim_mem(vm, sec_vm_dev->fw_phys,
 			sec_vm_dev->fw_size, sec_vm_dev->system_vm);
+	if (!ret && !sec_vm_dev->is_static) {
+		dma_free_coherent(dev, sec_vm_dev->fw_size, sec_vm_dev->fw_virt,
+			phys_to_dma(dev, sec_vm_dev->fw_phys));
+	}
+
 	return ret;
 }
 
 static int gh_vm_loader_mem_probe(struct gh_sec_vm_dev *sec_vm_dev)
 {
 	struct device *dev = sec_vm_dev->dev;
+	struct reserved_mem *rmem;
 	struct device_node *node;
 	struct resource res;
 	phys_addr_t phys;
@@ -342,25 +375,51 @@ static int gh_vm_loader_mem_probe(struct gh_sec_vm_dev *sec_vm_dev)
 		return -EINVAL;
 	}
 
-	ret = of_address_to_resource(node, 0, &res);
-	if (ret) {
-		dev_err(dev, "error %d getting \"memory-region\" resource\n",
-			ret);
-		goto err_of_node_put;
-	}
+	if (!of_property_read_bool(node, "no-map")) {
+		sec_vm_dev->is_static = false;
+		ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64));
+		if (ret) {
+			pr_err("%s: dma_set_mask_and_coherent failed\n", __func__);
+			goto err_of_node_put;
+		}
 
-	phys = res.start;
-	size = (size_t)resource_size(&res);
-	virt = memremap(phys, size, MEMREMAP_WC);
-	if (!virt) {
-		dev_err(dev, "Unable to remap firmware memory\n");
-		ret = -ENOMEM;
-		goto err_of_node_put;
-	}
+		ret = of_reserved_mem_device_init_by_idx(dev, dev->of_node, 0);
+		if (ret) {
+			pr_err("%s: Failed to initialize CMA mem, ret %d\n", __func__, ret);
+			goto err_of_node_put;
+		}
 
-	sec_vm_dev->fw_phys = phys;
-	sec_vm_dev->fw_virt = virt;
-	sec_vm_dev->fw_size = size;
+		rmem = of_reserved_mem_lookup(node);
+		if (!rmem) {
+			ret = -EINVAL;
+			pr_err("%s: failed to acquire memory region for %s\n",
+				__func__, node->name);
+			goto err_of_node_put;
+		}
+
+		sec_vm_dev->fw_size = rmem->size;
+	} else {
+		sec_vm_dev->is_static = true;
+		ret = of_address_to_resource(node, 0, &res);
+		if (ret) {
+			dev_err(dev, "error %d getting \"memory-region\" resource\n",
+				ret);
+			goto err_of_node_put;
+		}
+
+		phys = res.start;
+		size = (size_t)resource_size(&res);
+		virt = memremap(phys, size, MEMREMAP_WC);
+		if (!virt) {
+			dev_err(dev, "Unable to remap firmware memory\n");
+			ret = -ENOMEM;
+			goto err_of_node_put;
+		}
+
+		sec_vm_dev->fw_phys = phys;
+		sec_vm_dev->fw_virt = virt;
+		sec_vm_dev->fw_size = size;
+	}
 
 err_of_node_put:
 	of_node_put(node);
@@ -447,7 +506,10 @@ static int gh_secure_vm_loader_remove(struct platform_device *pdev)
 	list_del(&sec_vm_dev->list);
 	spin_unlock(&gh_sec_vm_lock);
 
-	memunmap(sec_vm_dev->fw_virt);
+	if (sec_vm_dev->is_static)
+		memunmap(sec_vm_dev->fw_virt);
+	else
+		of_reserved_mem_device_release(&pdev->dev);
 
 	return gh_virtio_backend_remove(sec_vm_dev->vm_name);
 }

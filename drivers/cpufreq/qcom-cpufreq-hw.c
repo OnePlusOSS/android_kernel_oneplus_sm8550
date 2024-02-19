@@ -17,6 +17,10 @@
 #include <linux/spinlock.h>
 #include <linux/qcom-cpufreq-hw.h>
 
+#if IS_ENABLED(CONFIG_OPLUS_OMRG)
+#include <linux/oplus_omrg.h>
+#endif
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/dcvsh.h>
 
@@ -43,6 +47,7 @@ static struct cpufreq_counter qcom_cpufreq_counter[NR_CPUS];
 
 struct qcom_cpufreq_soc_data {
 	u32 reg_enable;
+	u32 reg_domain_state;
 	u32 reg_freq_lut;
 	u32 reg_volt_lut;
 	u32 reg_current_vote;
@@ -71,6 +76,10 @@ struct qcom_cpufreq_data {
 	bool cancel_throttle;
 	struct delayed_work throttle_work;
 	struct cpufreq_policy *policy;
+	unsigned long last_non_boost_freq;
+
+	unsigned long dcvsh_freq_limit;
+	struct device_attribute freq_limit_attr;
 };
 
 static unsigned long cpu_hw_rate, xo_rate;
@@ -168,7 +177,6 @@ static int qcom_cpufreq_hw_target_index(struct cpufreq_policy *policy,
 	unsigned long freq = policy->freq_table[index].frequency;
 
 	writel_relaxed(index, data->base + soc_data->reg_perf_state);
-
 	if (icc_scaling_enabled)
 		qcom_cpufreq_set_bw(policy, freq);
 
@@ -205,6 +213,10 @@ static unsigned int qcom_cpufreq_hw_fast_switch(struct cpufreq_policy *policy,
 	index = policy->cached_resolved_idx;
 	writel_relaxed(index, data->base + soc_data->reg_perf_state);
 
+#if IS_ENABLED(CONFIG_OPLUS_OMRG)
+	omrg_cpufreq_check_limit(policy, policy->freq_table[index].frequency);
+#endif
+
 	return policy->freq_table[index].frequency;
 }
 
@@ -238,6 +250,7 @@ static int qcom_cpufreq_hw_read_lut(struct device *cpu_dev,
 		}
 	} else if (ret != -ENODEV) {
 		dev_err(cpu_dev, "Invalid opp table in device tree\n");
+		kfree(table);
 		return ret;
 	} else {
 		policy->fast_switch_possible = true;
@@ -303,6 +316,14 @@ static int qcom_cpufreq_hw_read_lut(struct device *cpu_dev,
 
 	table[i].frequency = CPUFREQ_TABLE_END;
 	policy->freq_table = table;
+
+	for (i = 0; i < LUT_MAX_ENTRIES && table[i].frequency != CPUFREQ_TABLE_END; i++) {
+		if (table[i].flags == CPUFREQ_BOOST_FREQ)
+			break;
+
+		drv_data->last_non_boost_freq = table[i].frequency;
+	}
+
 	dev_pm_opp_set_sharing_cpus(cpu_dev, policy->cpus);
 
 	return 0;
@@ -331,25 +352,34 @@ static void qcom_get_related_cpus(int index, struct cpumask *m)
 	}
 }
 
-static unsigned int qcom_lmh_get_throttle_freq(struct qcom_cpufreq_data *data)
+static ssize_t dcvsh_freq_limit_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
 {
-	const struct qcom_cpufreq_soc_data *soc_data = data->soc_data;
-	unsigned int val = readl_relaxed(data->base + soc_data->reg_current_vote);
+	struct qcom_cpufreq_data *c = container_of(attr, struct qcom_cpufreq_data,
+						   freq_limit_attr);
+	return scnprintf(buf, PAGE_SIZE, "%lu\n", c->dcvsh_freq_limit);
+}
 
-	val &= soc_data->throttle_freq_mask;
+static unsigned long qcom_lmh_get_throttle_freq(struct qcom_cpufreq_data *data)
+{
+	unsigned int lval;
 
-	return val * 19200;
+	if (data->soc_data->reg_current_vote)
+		lval = readl_relaxed(data->base + data->soc_data->reg_current_vote) & 0x3ff;
+	else
+		lval = readl_relaxed(data->base + data->soc_data->reg_domain_state) & 0xff;
+
+	return lval * xo_rate;
 }
 
 static void qcom_lmh_dcvs_notify(struct qcom_cpufreq_data *data)
 {
 	const struct qcom_cpufreq_soc_data *soc_data = data->soc_data;
-	unsigned long max_capacity, capacity, freq_hz, throttled_freq;
+	unsigned long max_capacity, capacity, freq_hz, throttled_freq, freq_limit;
 	struct cpufreq_policy *policy = data->policy;
-	int cpu = cpumask_first(policy->cpus);
+	int cpu = cpumask_first(policy->related_cpus);
 	struct device *dev = get_cpu_device(cpu);
 	struct dev_pm_opp *opp;
-	unsigned int freq;
 	u32 val;
 
 	if (!dev)
@@ -359,8 +389,7 @@ static void qcom_lmh_dcvs_notify(struct qcom_cpufreq_data *data)
 	 * Get the h/w throttled frequency, normalize it using the
 	 * registered opp table and use it to calculate thermal pressure.
 	 */
-	freq = qcom_lmh_get_throttle_freq(data);
-	freq_hz = freq * HZ_PER_KHZ;
+	freq_hz = qcom_lmh_get_throttle_freq(data);
 
 	opp = dev_pm_opp_find_freq_floor(dev, &freq_hz);
 	if (IS_ERR(opp) && PTR_ERR(opp) == -ERANGE)
@@ -372,18 +401,6 @@ static void qcom_lmh_dcvs_notify(struct qcom_cpufreq_data *data)
 	throttled_freq = freq_hz / HZ_PER_KHZ;
 	trace_dcvsh_freq(cpu, qcom_cpufreq_hw_get(cpu), throttled_freq);
 
-	/* Update thermal pressure */
-
-	max_capacity = arch_scale_cpu_capacity(cpu);
-	capacity = mult_frac(max_capacity, throttled_freq, policy->cpuinfo.max_freq);
-
-	/* Don't pass boost capacity to scheduler */
-	if (capacity > max_capacity)
-		capacity = max_capacity;
-
-	arch_set_thermal_pressure(policy->related_cpus,
-				  max_capacity - capacity);
-
 	/*
 	 * In the unlikely case policy is unregistered do not enable
 	 * polling or h/w interrupt
@@ -391,6 +408,10 @@ static void qcom_lmh_dcvs_notify(struct qcom_cpufreq_data *data)
 	mutex_lock(&data->throttle_lock);
 	if (data->cancel_throttle)
 		goto out;
+
+	max_capacity = arch_scale_cpu_capacity(cpu);
+	capacity = max_capacity;
+	freq_limit = policy->cpuinfo.max_freq;
 
 	/*
 	 * If h/w throttled frequency is higher than what cpufreq has requested
@@ -404,9 +425,27 @@ static void qcom_lmh_dcvs_notify(struct qcom_cpufreq_data *data)
 		enable_irq(data->throttle_irq);
 		trace_dcvsh_throttle(cpu, 0);
 	} else {
+		/*
+		 * Only apply thermal pressure if throttled_freq is less than
+		 * boost or last_non_boost_freq
+		 */
+		if (throttled_freq < data->last_non_boost_freq) {
+			capacity = mult_frac(max_capacity, throttled_freq,
+					     policy->cpuinfo.max_freq);
+
+			/* Don't pass boost capacity to scheduler */
+			if (capacity > max_capacity)
+				capacity = max_capacity;
+
+			freq_limit = throttled_freq;
+		}
+
 		mod_delayed_work(system_highpri_wq, &data->throttle_work,
 				 msecs_to_jiffies(10));
 	}
+
+	arch_set_thermal_pressure(policy->related_cpus, max_capacity - capacity);
+	data->dcvsh_freq_limit = freq_limit;
 
 out:
 	mutex_unlock(&data->throttle_lock);
@@ -448,25 +487,23 @@ static const struct qcom_cpufreq_soc_data qcom_soc_data = {
 	.reg_intr_status = 0x77c,
 	.reg_perf_state = 0x920,
 	.reg_cycle_cntr = 0x9c0,
-	.throttle_freq_mask = 0x3ff,
 	.lut_row_size = 32,
 	.throttle_irq_bit = 1,
-	.accumulative_counter = true,
+	.accumulative_counter = false,
 };
 
 static const struct qcom_cpufreq_soc_data epss_soc_data = {
 	.reg_enable = 0x0,
-	.reg_current_vote = 0x20,
+	.reg_domain_state = 0x20,
 	.reg_freq_lut = 0x100,
 	.reg_volt_lut = 0x200,
 	.reg_intr_clear = 0x308,
 	.reg_intr_status = 0x30c,
 	.reg_perf_state = 0x320,
 	.reg_cycle_cntr = 0x3c4,
-	.throttle_freq_mask = 0xff,
 	.lut_row_size = 4,
 	.throttle_irq_bit = 2,
-	.accumulative_counter = false,
+	.accumulative_counter = true,
 };
 
 static const struct of_device_id qcom_cpufreq_hw_match[] = {
@@ -476,7 +513,8 @@ static const struct of_device_id qcom_cpufreq_hw_match[] = {
 };
 MODULE_DEVICE_TABLE(of, qcom_cpufreq_hw_match);
 
-static int qcom_cpufreq_hw_lmh_init(struct cpufreq_policy *policy, int index)
+static int qcom_cpufreq_hw_lmh_init(struct cpufreq_policy *policy, int index,
+				    struct device *cpu_dev)
 {
 	struct qcom_cpufreq_data *data = policy->driver_data;
 	struct platform_device *pdev = cpufreq_get_driver_data();
@@ -503,6 +541,13 @@ static int qcom_cpufreq_hw_lmh_init(struct cpufreq_policy *policy, int index)
 		dev_err(&pdev->dev, "Error registering %s: %d\n", data->irq_name, ret);
 		return 0;
 	}
+
+	sysfs_attr_init(&data->freq_limit_attr.attr);
+	data->freq_limit_attr.attr.name = "dcvsh_freq_limit";
+	data->freq_limit_attr.show = dcvsh_freq_limit_show;
+	data->freq_limit_attr.attr.mode = 0444;
+	data->dcvsh_freq_limit = U32_MAX;
+	device_create_file(cpu_dev, &data->freq_limit_attr);
 
 	return 0;
 }
@@ -624,7 +669,7 @@ static int qcom_cpufreq_hw_cpu_init(struct cpufreq_policy *policy)
 			dev_warn(cpu_dev, "failed to enable boost: %d\n", ret);
 	}
 
-	ret = qcom_cpufreq_hw_lmh_init(policy, index);
+	ret = qcom_cpufreq_hw_lmh_init(policy, index, cpu_dev);
 	if (ret)
 		goto error;
 
@@ -638,6 +683,9 @@ static int qcom_cpufreq_hw_cpu_exit(struct cpufreq_policy *policy)
 {
 	struct device *cpu_dev = get_cpu_device(policy->cpu);
 
+#if IS_ENABLED(CONFIG_OPLUS_OMRG)
+	omrg_cpufreq_unregister(policy);
+#endif
 	qcom_cpufreq_hw_lmh_exit(policy->driver_data);
 	dev_pm_opp_remove_all_dynamic(cpu_dev);
 	dev_pm_opp_of_cpumask_remove_table(policy->related_cpus);
@@ -665,6 +713,7 @@ static struct cpufreq_driver cpufreq_qcom_hw_driver = {
 	.fast_switch    = qcom_cpufreq_hw_fast_switch,
 	.name		= "qcom-cpufreq-hw",
 	.attr		= qcom_cpufreq_hw_attr,
+	.boost_enabled	= true,
 };
 
 static int qcom_cpufreq_hw_driver_probe(struct platform_device *pdev)

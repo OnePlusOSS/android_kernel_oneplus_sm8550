@@ -66,6 +66,7 @@ struct rw_semaphore {
 	struct lockdep_map	dep_map;
 #endif
 	ANDROID_VENDOR_DATA(1);
+	ANDROID_OEM_DATA_ARRAY(1, 2);
 };
 
 enum rwsem_waiter_type {
@@ -79,8 +80,6 @@ struct rwsem_waiter {
 	enum rwsem_waiter_type type;
 	unsigned long timeout;
 	unsigned long last_rowner;
-
-	/* Writer only, not initialized in reader */
 	bool handoff_set;
 };
 

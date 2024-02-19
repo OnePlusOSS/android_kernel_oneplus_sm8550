@@ -258,18 +258,16 @@ int irdma_net_event(struct notifier_block *notifier, unsigned long event,
 	u32 local_ipaddr[4] = {};
 	bool ipv4 = true;
 
-	real_dev = rdma_vlan_dev_real_dev(netdev);
-	if (!real_dev)
-		real_dev = netdev;
-
-	ibdev = ib_device_get_by_netdev(real_dev, RDMA_DRIVER_IRDMA);
-	if (!ibdev)
-		return NOTIFY_DONE;
-
-	iwdev = to_iwdev(ibdev);
-
 	switch (event) {
 	case NETEVENT_NEIGH_UPDATE:
+		real_dev = rdma_vlan_dev_real_dev(netdev);
+		if (!real_dev)
+			real_dev = netdev;
+		ibdev = ib_device_get_by_netdev(real_dev, RDMA_DRIVER_IRDMA);
+		if (!ibdev)
+			return NOTIFY_DONE;
+
+		iwdev = to_iwdev(ibdev);
 		p = (__be32 *)neigh->primary_key;
 		if (neigh->tbl->family == AF_INET6) {
 			ipv4 = false;
@@ -290,12 +288,11 @@ int irdma_net_event(struct notifier_block *notifier, unsigned long event,
 			irdma_manage_arp_cache(iwdev->rf, neigh->ha,
 					       local_ipaddr, ipv4,
 					       IRDMA_ARP_DELETE);
+		ib_device_put(ibdev);
 		break;
 	default:
 		break;
 	}
-
-	ib_device_put(ibdev);
 
 	return NOTIFY_DONE;
 }
@@ -2537,6 +2534,9 @@ void irdma_ib_qp_event(struct irdma_qp *iwqp, enum irdma_qp_event_type event)
 		break;
 	case IRDMA_QP_EVENT_ACCESS_ERR:
 		ibevent.event = IB_EVENT_QP_ACCESS_ERR;
+		break;
+	case IRDMA_QP_EVENT_REQ_ERR:
+		ibevent.event = IB_EVENT_QP_REQ_ERR;
 		break;
 	}
 	ibevent.device = iwqp->ibqp.device;

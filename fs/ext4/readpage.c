@@ -76,6 +76,16 @@ static void __read_end_io(struct bio *bio)
 
 	bio_for_each_segment_all(bv, bio, iter_all) {
 		page = bv->bv_page;
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (PageCont(page)) {
+			if (bio->bi_status || PageError(page)) {
+				ClearPageUptodate(page);
+				SetPageError(page);
+			}
+			set_cont_pte_uptodate_and_unlock(page);
+			continue;
+		}
+#endif
 
 		/* PG_error was set if any post_read step failed */
 		if (bio->bi_status || PageError(page)) {
@@ -382,8 +392,15 @@ int ext4_mpage_readpages(struct inode *inode,
 				if (ext4_need_verity(inode, page->index) &&
 				    !fsverity_verify_page(page))
 					goto set_error_page;
-				SetPageUptodate(page);
-				unlock_page(page);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+				if (PageCont(page)) {
+					set_cont_pte_uptodate_and_unlock(page);
+				} else
+#endif
+				{
+					SetPageUptodate(page);
+					unlock_page(page);
+				}
 				goto next_page;
 			}
 		} else if (fully_mapped) {
@@ -440,8 +457,15 @@ int ext4_mpage_readpages(struct inode *inode,
 		}
 		if (!PageUptodate(page))
 			block_read_full_page(page, ext4_get_block);
-		else
-			unlock_page(page);
+		else {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (PageCont(page)) {
+				ClearPageUptodate(page);
+				set_cont_pte_uptodate_and_unlock(page);
+			}  else
+#endif
+				unlock_page(page);
+		}
 	next_page:
 		if (rac)
 			put_page(page);

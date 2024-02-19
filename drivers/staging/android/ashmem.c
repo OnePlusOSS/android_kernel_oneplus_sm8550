@@ -817,6 +817,7 @@ out_unlock:
 static long ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct ashmem_area *asma = file->private_data;
+	unsigned long ino;
 	long ret = -ENOTTY;
 
 	switch (cmd) {
@@ -859,6 +860,23 @@ static long ashmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			ret = ashmem_shrink_count(&ashmem_shrinker, &sc);
 			ashmem_shrink_scan(&ashmem_shrinker, &sc);
 		}
+		break;
+	case ASHMEM_GET_FILE_ID:
+		/* Lock around our check to avoid racing with ashmem_mmap(). */
+		mutex_lock(&ashmem_mutex);
+		if (!asma || !asma->file) {
+			mutex_unlock(&ashmem_mutex);
+			ret = -EINVAL;
+			break;
+		}
+		ino = file_inode(asma->file)->i_ino;
+		mutex_unlock(&ashmem_mutex);
+
+		if (copy_to_user((void __user *)arg, &ino, sizeof(ino))) {
+			ret = -EFAULT;
+			break;
+		}
+		ret = 0;
 		break;
 	}
 
@@ -915,6 +933,15 @@ static const struct file_operations ashmem_fops = {
 	.show_fdinfo = ashmem_show_fdinfo,
 #endif
 };
+
+/*
+ * is_ashmem_file - Check if struct file* is associated with ashmem
+ */
+int is_ashmem_file(struct file *file)
+{
+	return file->f_op == &ashmem_fops;
+}
+EXPORT_SYMBOL_GPL(is_ashmem_file);
 
 static struct miscdevice ashmem_misc = {
 	.minor = MISC_DYNAMIC_MINOR,

@@ -30,7 +30,8 @@ struct scmi_protocol_handle;
  * @l2wb_pct: sets the stall_floor needed for hw memlat governor
  * @l2wb_filter: sets the l2wb_filter needed for hw memlat governor
  * @freq_scale_pct: sets the scaling factor for ipm differential voting
- * @freq_scale_limit_mhz: upper limit upto which scaling is allowed
+ * @freq_scale_ceil_mhz: upper limit upto which ipm scaling is allowed
+ * @freq_scale_floor_mhz: lower limit upto which ipm scaling is allowed
  * @sample_ms: sets the sample_ms at this interval governor will poll
  * @freq_map: sets the freq_map of the monitor
  * @min_freq: sets the min_freq of monitor
@@ -47,6 +48,12 @@ struct scmi_memlat_vendor_ops {
 		       u32 hw_type, u32 mon_type, u32 index, const char *mon_name);
 	int (*set_grp_ev_map)(const struct scmi_protocol_handle *ph, u32 hw_type,
 			  void *buf, u32 num_evs);
+	int (*adaptive_low_freq)(const struct scmi_protocol_handle *ph,
+					 u32 hw_type, u32 index, u32 val);
+	int (*adaptive_high_freq)(const struct scmi_protocol_handle *ph,
+					  u32 hw_type, u32 index, u32 val);
+	int (*get_adaptive_cur_freq)(const struct scmi_protocol_handle *ph, u32 hw_type,
+				     u32 mon_idx, void *buf);
 	int (*set_common_ev_map)(const struct scmi_protocol_handle *ph, void *buf,
 				 u32 num_evs);
 	int (*ipm_ceil)(const struct scmi_protocol_handle *ph,
@@ -61,7 +68,9 @@ struct scmi_memlat_vendor_ops {
 			     u32 hw_type, u32 index, u32 val);
 	int (*freq_scale_pct)(const struct scmi_protocol_handle *ph,
 			     u32 hw_type, u32 index, u32 val);
-	int (*freq_scale_limit_mhz)(const struct scmi_protocol_handle *ph,
+	int (*freq_scale_ceil_mhz)(const struct scmi_protocol_handle *ph,
+			     u32 hw_type, u32 index, u32 val);
+	int (*freq_scale_floor_mhz)(const struct scmi_protocol_handle *ph,
 			     u32 hw_type, u32 index, u32 val);
 	int (*sample_ms)(const struct scmi_protocol_handle *ph, u32 val);
 	int (*freq_map)(const struct scmi_protocol_handle *ph,
@@ -70,6 +79,8 @@ struct scmi_memlat_vendor_ops {
 			u32 hw_type, u32 index, u32 val);
 	int (*max_freq)(const struct scmi_protocol_handle *ph,
 			u32 hw_type, u32 index, u32 val);
+	int (*get_cur_freq)(const struct scmi_protocol_handle *ph, u32 hw_type,
+			    u32 mon_idx, void *buf);
 	int (*start_timer)(const struct scmi_protocol_handle *ph);
 	int (*stop_timer)(const struct scmi_protocol_handle *ph);
 	int (*set_log_level)(const struct scmi_protocol_handle *ph, u32 val);

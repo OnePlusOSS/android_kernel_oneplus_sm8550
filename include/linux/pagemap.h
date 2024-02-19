@@ -134,7 +134,7 @@ static inline bool mapping_thp_support(struct address_space *mapping)
 
 static inline int filemap_nr_thps(struct address_space *mapping)
 {
-#ifdef CONFIG_READ_ONLY_THP_FOR_FS
+#if defined(CONFIG_READ_ONLY_THP_FOR_FS) || defined(CONFIG_CONT_PTE_HUGEPAGE)
 	return atomic_read(&mapping->nr_thps);
 #else
 	return 0;
@@ -143,7 +143,7 @@ static inline int filemap_nr_thps(struct address_space *mapping)
 
 static inline void filemap_nr_thps_inc(struct address_space *mapping)
 {
-#ifdef CONFIG_READ_ONLY_THP_FOR_FS
+#if defined(CONFIG_READ_ONLY_THP_FOR_FS) || defined(CONFIG_CONT_PTE_HUGEPAGE)
 	if (!mapping_thp_support(mapping))
 		atomic_inc(&mapping->nr_thps);
 #else
@@ -153,7 +153,7 @@ static inline void filemap_nr_thps_inc(struct address_space *mapping)
 
 static inline void filemap_nr_thps_dec(struct address_space *mapping)
 {
-#ifdef CONFIG_READ_ONLY_THP_FOR_FS
+#if defined(CONFIG_READ_ONLY_THP_FOR_FS) || defined(CONFIG_CONT_PTE_HUGEPAGE)
 	if (!mapping_thp_support(mapping))
 		atomic_dec(&mapping->nr_thps);
 #else
@@ -609,6 +609,19 @@ extern void unlock_page(struct page *page);
  */
 static inline int trylock_page(struct page *page)
 {
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && defined(CONFIG_CONT_PTE_HUGEPAGE_DEBUG)
+	/* for debugging, detect those gettings subpages' lock */
+#define PG_cont (__NR_PAGEFLAGS + 4)
+#define PageCont(page) test_bit(PG_cont, &(page)->flags)
+
+	if (PageCont(page) && !PageCompound(page) && !IS_ALIGNED(page_to_pfn(page), CONT_PTES)) {
+		pr_err("@@@%s on subpage index:%lx-%lx page:%lx head:%lx comm:%s\n",
+		       __func__, page->index, compound_head(page)->index,
+		       (unsigned long)page, (unsigned long)compound_head(page),
+		       current->comm);
+		WARN_ON(1);
+	}
+#endif
 	page = compound_head(page);
 	return (likely(!test_and_set_bit_lock(PG_locked, &page->flags)));
 }
@@ -666,6 +679,35 @@ static inline __sched int lock_page_or_retry(struct page *page, struct mm_struct
 	return trylock_page(page) || __lock_page_or_retry(page, mm, flags);
 }
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+static inline __sched int lock_nr_pages_or_retry(struct page **page, struct mm_struct *mm,
+				     unsigned int flags, int nr)
+{
+	int i, ret;
+
+	might_sleep();
+
+	for (i = 0; i < nr; i++) {
+		ret = trylock_page(page[i]);
+		if (ret)
+			continue;
+
+		ret = __lock_page_or_retry(page[i], mm, flags);
+		if (!ret)
+			break;
+	}
+
+	if (!ret && i) {
+		for (i--; i >= 0; i--) {
+			CHP_BUG_ON(!PageLocked(page[i]));
+			unlock_page(page[i]);
+		}
+	}
+
+	return ret;
+}
+#endif
+
 /*
  * This is exported only for wait_on_page_locked/wait_on_page_writeback, etc.,
  * and should not be used directly.
@@ -673,7 +715,7 @@ static inline __sched int lock_page_or_retry(struct page *page, struct mm_struct
 extern void wait_on_page_bit(struct page *page, int bit_nr);
 extern int wait_on_page_bit_killable(struct page *page, int bit_nr);
 
-/* 
+/*
  * Wait for a page to be unlocked.
  *
  * This must be called with the caller "holding" the page,
@@ -731,61 +773,11 @@ int wait_on_page_private_2_killable(struct page *page);
 extern void add_page_wait_queue(struct page *page, wait_queue_entry_t *waiter);
 
 /*
- * Fault everything in given userspace address range in.
+ * Fault in userspace address range.
  */
-static inline int fault_in_pages_writeable(char __user *uaddr, size_t size)
-{
-	char __user *end = uaddr + size - 1;
-
-	if (unlikely(size == 0))
-		return 0;
-
-	if (unlikely(uaddr > end))
-		return -EFAULT;
-	/*
-	 * Writing zeroes into userspace here is OK, because we know that if
-	 * the zero gets there, we'll be overwriting it.
-	 */
-	do {
-		if (unlikely(__put_user(0, uaddr) != 0))
-			return -EFAULT;
-		uaddr += PAGE_SIZE;
-	} while (uaddr <= end);
-
-	/* Check whether the range spilled into the next page. */
-	if (((unsigned long)uaddr & PAGE_MASK) ==
-			((unsigned long)end & PAGE_MASK))
-		return __put_user(0, end);
-
-	return 0;
-}
-
-static inline int fault_in_pages_readable(const char __user *uaddr, size_t size)
-{
-	volatile char c;
-	const char __user *end = uaddr + size - 1;
-
-	if (unlikely(size == 0))
-		return 0;
-
-	if (unlikely(uaddr > end))
-		return -EFAULT;
-
-	do {
-		if (unlikely(__get_user(c, uaddr) != 0))
-			return -EFAULT;
-		uaddr += PAGE_SIZE;
-	} while (uaddr <= end);
-
-	/* Check whether the range spilled into the next page. */
-	if (((unsigned long)uaddr & PAGE_MASK) ==
-			((unsigned long)end & PAGE_MASK)) {
-		return __get_user(c, end);
-	}
-
-	(void)c;
-	return 0;
-}
+size_t fault_in_writeable(char __user *uaddr, size_t size);
+size_t fault_in_safe_writeable(const char __user *uaddr, size_t size);
+size_t fault_in_readable(const char __user *uaddr, size_t size);
 
 int add_to_page_cache_locked(struct page *page, struct address_space *mapping,
 				pgoff_t index, gfp_t gfp_mask);

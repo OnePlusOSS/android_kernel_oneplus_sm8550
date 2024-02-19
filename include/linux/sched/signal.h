@@ -12,6 +12,7 @@
 #include <linux/posix-timers.h>
 #include <linux/mm_types.h>
 #include <asm/ptrace.h>
+#include <linux/android_kabi.h>
 
 /*
  * Types defining task->signal and task->sighand and APIs using them:
@@ -235,6 +236,11 @@ struct signal_struct {
 						 * and may have inconsistent
 						 * permissions.
 						 */
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 } __randomize_layout;
 
 /*
@@ -255,6 +261,12 @@ struct signal_struct {
 
 #define SIGNAL_STOP_MASK (SIGNAL_CLD_MASK | SIGNAL_STOP_STOPPED | \
 			  SIGNAL_STOP_CONTINUED)
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+#define SIGNAL_HUGEPAGE_CRITICAL 0x00000080
+#define SIGNAL_HUGEPAGE_NOT_CRITICAL 0x00000100
+#define SIGNAL_CHP_SPECIAL 0x00000200
+#endif
 
 static inline void signal_set_stop_flags(struct signal_struct *sig,
 					 unsigned int flags)

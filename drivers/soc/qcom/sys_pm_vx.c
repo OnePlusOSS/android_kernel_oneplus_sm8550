@@ -22,6 +22,10 @@
 #include <linux/uaccess.h>
 #include <soc/qcom/subsystem_sleep_stats.h>
 
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+#include <linux/proc_fs.h>
+#endif
+
 #define MAX_QMP_MSG_SIZE	96
 #define MODE_AOSS		0xaa
 #define MODE_CXPC		0xcc
@@ -369,6 +373,21 @@ static const struct file_operations sys_pm_vx_fops = {
 	.release = single_release,
 };
 
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+static int open_proc_vx(struct inode *inode, struct file *file)
+{
+	struct vx_platform_data *pd = (struct vx_platform_data *)PDE_DATA(file_inode(file));
+	return single_open(file, vx_show, pd);
+}
+
+static const struct proc_ops sys_pm_vx_proc_fops = {
+	.proc_open		= open_proc_vx,
+	.proc_read		= seq_read,
+	.proc_lseek		= seq_lseek,
+	.proc_release		= single_release,
+};
+#endif
+
 #if defined(CONFIG_DEBUG_FS)
 static int vx_create_debug_nodes(struct vx_platform_data *pd)
 {
@@ -402,6 +421,10 @@ static int vx_probe(struct platform_device *pdev)
 	const char **drvs;
 	int i, ret;
 
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	struct proc_dir_entry *proc_file;
+#endif
+
 	pd = devm_kzalloc(&pdev->dev, sizeof(*pd), GFP_KERNEL);
 	if (!pd)
 		return -ENOMEM;
@@ -428,6 +451,12 @@ static int vx_probe(struct platform_device *pdev)
 	ret = vx_create_debug_nodes(pd);
 	if (ret)
 		return ret;
+#endif
+
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	proc_file = proc_create_data("sys_pm_violators", 0444, NULL, &sys_pm_vx_proc_fops, pd);
+ 	if (!proc_file)
+  		return -EINVAL;
 #endif
 
 	ret = device_create_file(&pdev->dev, &dev_attr_debug_time_ms);
@@ -478,6 +507,9 @@ static int vx_remove(struct platform_device *pdev)
 
 #if defined(CONFIG_DEBUG_FS)
 	debugfs_remove(pd->vx_file);
+#endif
+#ifdef CONFIG_OPLUS_POWERINFO_STANDBY_DEBUG
+	remove_proc_entry("sys_pm_violators", NULL);
 #endif
 	device_remove_file(&pdev->dev, &dev_attr_debug_time_ms);
 	device_remove_file(&pdev->dev, &dev_attr_debug_enable);

@@ -41,6 +41,7 @@
 
 static DEFINE_PER_CPU(bool, cpu_is_hp);
 static DEFINE_MUTEX(perfevent_lock);
+static DEFINE_MUTEX(freq_pmqos_lock);
 
 enum event_idx {
 	INST_EVENT,
@@ -231,7 +232,7 @@ static int freq_qos_request_init(void)
 			goto cleanup;
 		}
 
-		per_cpu(msm_perf_cpu_stats, cpu).max = UINT_MAX;
+		per_cpu(msm_perf_cpu_stats, cpu).max = FREQ_QOS_MAX_DEFAULT_VALUE;
 		req = &per_cpu(qos_req_max, cpu);
 		ret = freq_qos_add_request(&policy->constraints, req,
 			FREQ_QOS_MAX, FREQ_QOS_MAX_DEFAULT_VALUE);
@@ -258,7 +259,7 @@ cleanup:
 			freq_qos_remove_request(req);
 
 		per_cpu(msm_perf_cpu_stats, cpu).min = 0;
-		per_cpu(msm_perf_cpu_stats, cpu).max = UINT_MAX;
+		per_cpu(msm_perf_cpu_stats, cpu).max = FREQ_QOS_MAX_DEFAULT_VALUE;
 	}
 	return ret;
 }
@@ -275,15 +276,18 @@ static ssize_t set_cpu_min_freq(struct kobject *kobj,
 	struct freq_qos_request *req;
 	int ret = 0;
 
+	mutex_lock(&freq_pmqos_lock);
 	if (!ready_for_freq_updates) {
 		ret = freq_qos_request_init();
 		if (ret) {
 			pr_err("%s: Failed to init qos requests policy for ret=%d\n",
 				__func__, ret);
+			mutex_unlock(&freq_pmqos_lock);
 			return ret;
 		}
 		ready_for_freq_updates = true;
 	}
+	mutex_unlock(&freq_pmqos_lock);
 
 	while ((cp = strpbrk(cp + 1, " :")))
 		ntokens++;
@@ -364,15 +368,18 @@ static ssize_t set_cpu_max_freq(struct kobject *kobj,
 	struct freq_qos_request *req;
 	int ret = 0;
 
+	mutex_lock(&freq_pmqos_lock);
 	if (!ready_for_freq_updates) {
 		ret = freq_qos_request_init();
 		if (ret) {
 			pr_err("%s: Failed to init qos requests policy for ret=%d\n",
 				__func__, ret);
+			mutex_unlock(&freq_pmqos_lock);
 			return ret;
 		}
 		ready_for_freq_updates = true;
 	}
+	mutex_unlock(&freq_pmqos_lock);
 
 	while ((cp = strpbrk(cp + 1, " :")))
 		ntokens++;
@@ -392,7 +399,8 @@ static ssize_t set_cpu_max_freq(struct kobject *kobj,
 		if (cpu_possible(cpu)) {
 			i_cpu_stats = &per_cpu(msm_perf_cpu_stats, cpu);
 
-			i_cpu_stats->max = val;
+			i_cpu_stats->max = min_t(uint, val,
+				(unsigned int)FREQ_QOS_MAX_DEFAULT_VALUE);
 			cpumask_set_cpu(cpu, limit_mask_max);
 		}
 
@@ -864,7 +872,7 @@ static ssize_t set_core_ctl_register(struct kobject *kobj,
 	bool old_val = core_ctl_register;
 	int ret;
 
-	ret = sscanf(buf, "%du", &core_ctl_register);
+	ret = kstrtobool(buf, &core_ctl_register);
 	if (ret < 0) {
 		pr_err("msm_perf: getting new core_ctl_register failed, ret=%d\n", ret);
 		return ret;

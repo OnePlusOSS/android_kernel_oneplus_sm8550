@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Copyright (c) 2015,2017-2022, Qualcomm Innovation Center, Inc. All rights reserved.*/
+/*
+ * Copyright (c) 2015, 2017-2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ */
 
 #include <linux/kernel.h>
 #include <linux/of.h>
@@ -729,10 +732,10 @@ int mhi_dev_mmio_init(struct mhi_dev *dev)
 
 	mhi_dev_mmio_read(dev, ERDBOFF, &dev->cfg.erdb_offset);
 
-	dev->cfg.channels = NUM_CHANNELS;
-
-	if (!dev->mmio_initialized)
+	if (!dev->is_flashless)
 		mhi_dev_mmio_reset(dev);
+
+	dev->cfg.channels = NUM_CHANNELS;
 
 	return 0;
 }

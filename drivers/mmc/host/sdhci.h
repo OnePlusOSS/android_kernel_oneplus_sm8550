@@ -16,6 +16,7 @@
 #include <linux/io.h>
 #include <linux/leds.h>
 #include <linux/interrupt.h>
+#include <linux/android_kabi.h>
 
 #include <linux/mmc/host.h>
 
@@ -356,6 +357,9 @@ struct sdhci_adma2_64_desc {
  */
 #define MMC_CMD_TRANSFER_TIME	(10 * NSEC_PER_MSEC) /* max 10 ms */
 
+#define sdhci_err_stats_inc(host, err_name) \
+	mmc_debugfs_err_stats_inc((host)->mmc, MMC_ERR_##err_name)
+
 enum sdhci_cookie {
 	COOKIE_UNMAPPED,
 	COOKIE_PRE_MAPPED,	/* mapped by sdhci_pre_req() */
@@ -611,6 +615,19 @@ struct sdhci_host {
 
 	u64			data_timeout;
 
+	/*
+	 * ANDROID:
+	 * drv_type and reinit_uhs are here to preserve the ABI changes in commit 57ee7bc4c60a
+	 * ("mmc: sdhci: Fix voltage switch delay")
+	 */
+	ANDROID_KABI_USE(1, struct {
+			 u8 reinit_uhs	:1;
+			 u8 reserve01	:7;
+			 u8 drv_type;
+			 u16 reserve02;
+			 u32 reserve03;
+			 });
+
 	unsigned long private[] ____cacheline_aligned;
 };
 
@@ -658,6 +675,8 @@ struct sdhci_ops {
 	void	(*request_done)(struct sdhci_host *host,
 				struct mmc_request *mrq);
 	void    (*dump_vendor_regs)(struct sdhci_host *host);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS

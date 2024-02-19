@@ -772,6 +772,11 @@ static const struct freq_tbl ftbl_disp_cc_mdss_mdp_clk_src[] = {
 	F(150000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
 	F(172000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
 	F(200000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
+#ifdef OPLUS_FEATURE_DISPLAY
+	/* add 250Mhz and 300Mhz mdp_clk to reduce power comsumption */
+	F(250000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
+	F(300000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
+#endif /* OPLUS_FEATURE_DISPLAY */
 	F(325000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
 	F(375000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),
 	F(514000000, P_DISP_CC_PLL0_OUT_MAIN, 3, 0, 0),

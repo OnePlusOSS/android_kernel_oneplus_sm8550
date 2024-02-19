@@ -52,9 +52,6 @@ struct etr_perf_buffer {
 /* Lower limit for ETR hardware buffer */
 #define TMC_ETR_PERF_MIN_BUF_SIZE	SZ_1M
 
-/* SW USB reserved memory size */
-#define TMC_ETR_SW_USB_BUF_SIZE SZ_64M
-
 /*
  * The TMC ETR SG has a page size of 4K. The SG table contains pointers
  * to 4KB buffers. However, the OS may use a PAGE_SIZE different from
@@ -1074,8 +1071,10 @@ static int  __tmc_etr_enable_hw(struct tmc_drvdata *drvdata)
 
 	/* Wait for TMCSReady bit to be set */
 	rc = tmc_wait_for_tmcready(drvdata);
-	if (rc)
+	if (rc) {
+		CS_LOCK(drvdata->base);
 		return rc;
+	}
 
 	writel_relaxed(etr_buf->size / 4, drvdata->base + TMC_RSZ);
 	writel_relaxed(TMC_MODE_CIRCULAR_BUFFER, drvdata->base + TMC_MODE);
@@ -1256,6 +1255,22 @@ static int tmc_enable_etr_sink_sysfs(struct coresight_device *csdev)
 	struct tmc_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
 	struct etr_buf *sysfs_buf = NULL, *new_buf = NULL, *free_buf = NULL;
 
+	spin_lock_irqsave(&drvdata->spinlock, flags);
+	if (drvdata->reading || drvdata->mode == CS_MODE_PERF) {
+		ret = -EBUSY;
+		goto unlock_out;
+	}
+
+	/*
+	 * In sysFS mode we can have multiple writers per sink.  Since this
+	 * sink is already enabled no memory is needed and the HW need not be
+	 * touched, even if the buffer size has changed.
+	 */
+	if (drvdata->mode == CS_MODE_SYSFS) {
+		atomic_inc(csdev->refcnt);
+		goto unlock_out;
+	}
+
 	/*
 	 * If we are enabling the ETR from disabled state, we need to make
 	 * sure we have a buffer with the right size. The etr_buf is not reset
@@ -1264,7 +1279,6 @@ static int tmc_enable_etr_sink_sysfs(struct coresight_device *csdev)
 	 * buffer, provided the size matches. Any allocation has to be done
 	 * with the lock released.
 	 */
-	spin_lock_irqsave(&drvdata->spinlock, flags);
 	if ((drvdata->out_mode == TMC_ETR_OUT_MODE_MEM)
 		|| (drvdata->out_mode == TMC_ETR_OUT_MODE_USB &&
 			drvdata->usb_data->usb_mode ==
@@ -1285,21 +1299,6 @@ static int tmc_enable_etr_sink_sysfs(struct coresight_device *csdev)
 			/* Let's try again */
 			spin_lock_irqsave(&drvdata->spinlock, flags);
 		}
-	}
-
-	if (drvdata->reading || drvdata->mode == CS_MODE_PERF) {
-		ret = -EBUSY;
-		goto unlock_out;
-	}
-
-	/*
-	 * In sysFS mode we can have multiple writers per sink.  Since this
-	 * sink is already enabled no memory is needed and the HW need not be
-	 * touched, even if the buffer size has changed.
-	 */
-	if (drvdata->mode == CS_MODE_SYSFS) {
-		atomic_inc(csdev->refcnt);
-		goto unlock_out;
 	}
 
 	/*
@@ -1325,13 +1324,16 @@ static int tmc_enable_etr_sink_sysfs(struct coresight_device *csdev)
 	atomic_inc(csdev->refcnt);
 
 	spin_unlock_irqrestore(&drvdata->spinlock, flags);
-	if (drvdata->out_mode == TMC_ETR_OUT_MODE_USB) {
+	if (drvdata->out_mode == TMC_ETR_OUT_MODE_USB)
 		ret = tmc_usb_enable(drvdata->usb_data);
-		if (ret) {
-			atomic_dec(csdev->refcnt);
-			drvdata->mode = CS_MODE_DISABLED;
-		}
+	else if (drvdata->out_mode == TMC_ETR_OUT_MODE_ETH)
+		ret = tmc_eth_enable(drvdata->eth_data);
+
+	if (ret) {
+		atomic_dec(csdev->refcnt);
+		drvdata->mode = CS_MODE_DISABLED;
 	}
+
 	goto out;
 
 unlock_out:
@@ -1825,11 +1827,14 @@ static int _tmc_disable_etr_sink(struct coresight_device *csdev,
 			spin_lock_irqsave(&drvdata->spinlock, flags);
 		}
 		tmc_etr_disable_hw(drvdata);
-	} else {
+	} else if (drvdata->out_mode == TMC_ETR_OUT_MODE_USB &&
+		drvdata->usb_data->usb_mode == TMC_ETR_USB_BAM_TO_BAM){
 		spin_unlock_irqrestore(&drvdata->spinlock, flags);
 		tmc_usb_disable(drvdata->usb_data);
 		spin_lock_irqsave(&drvdata->spinlock, flags);
-	}
+	} else if (drvdata->out_mode == TMC_ETR_OUT_MODE_ETH)
+		tmc_eth_disable(drvdata->eth_data);
+
 	/* Dissociate from monitored process. */
 	drvdata->pid = -1;
 	drvdata->mode = CS_MODE_DISABLED;
@@ -1859,16 +1864,33 @@ int tmc_etr_switch_mode(struct tmc_drvdata *drvdata, const char *out_mode)
 	enum tmc_etr_out_mode new_mode, old_mode;
 
 	mutex_lock(&drvdata->mem_lock);
-	if (!strcmp(out_mode, str_tmc_etr_out_mode[TMC_ETR_OUT_MODE_MEM]))
-		new_mode = TMC_ETR_OUT_MODE_MEM;
-	else if (!strcmp(out_mode, str_tmc_etr_out_mode[TMC_ETR_OUT_MODE_USB])) {
-		if (drvdata->usb_data->usb_mode == TMC_ETR_USB_NONE) {
+	if (!strcmp(out_mode, str_tmc_etr_out_mode[TMC_ETR_OUT_MODE_MEM])) {
+		if (drvdata->mode_support & BIT(TMC_ETR_OUT_MODE_MEM))
+			new_mode = TMC_ETR_OUT_MODE_MEM;
+		else {
+			dev_err(&drvdata->csdev->dev,
+					"Memory mode is not supported.\n");
+			mutex_unlock(&drvdata->mem_lock);
+			return -EINVAL;
+		}
+	} else if (!strcmp(out_mode, str_tmc_etr_out_mode[TMC_ETR_OUT_MODE_USB])) {
+		if (drvdata->mode_support & BIT(TMC_ETR_OUT_MODE_USB))
+			new_mode = TMC_ETR_OUT_MODE_USB;
+		else {
 			dev_err(&drvdata->csdev->dev,
 					"USB mode is not supported.\n");
 			mutex_unlock(&drvdata->mem_lock);
 			return -EINVAL;
 		}
-		new_mode = TMC_ETR_OUT_MODE_USB;
+	} else if (!strcmp(out_mode, str_tmc_etr_out_mode[TMC_ETR_OUT_MODE_ETH])) {
+		if (drvdata->mode_support & BIT(TMC_ETR_OUT_MODE_ETH))
+			new_mode = TMC_ETR_OUT_MODE_ETH;
+		else {
+			dev_err(&drvdata->csdev->dev,
+					"ETH mode is not supported.\n");
+			mutex_unlock(&drvdata->mem_lock);
+			return -EINVAL;
+		}
 	} else {
 		mutex_unlock(&drvdata->mem_lock);
 		return -EINVAL;

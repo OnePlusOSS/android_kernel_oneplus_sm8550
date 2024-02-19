@@ -7,9 +7,11 @@
 #if !defined(_TRACE_HOOK_RPROC_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_HOOK_RPROC_H
 
-struct rproc;
-
 #include <trace/hooks/vendor_hooks.h>
+
+#ifdef __GENKSYMS__
+#include <linux/remoteproc.h>
+#endif
 
 struct rproc;
 

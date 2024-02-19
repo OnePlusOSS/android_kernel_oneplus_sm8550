@@ -122,7 +122,7 @@ void *qcom_mdt_read_metadata(struct device *dev, const struct firmware *fw, cons
 	ehdr = (struct elf32_hdr *)fw->data;
 	phdrs = (struct elf32_phdr *)(ehdr + 1);
 
-	if (ehdr->e_phnum < 2)
+	if (ehdr->e_phnum < 2 || ehdr->e_phnum > PN_XNUM)
 		return ERR_PTR(-EINVAL);
 
 	if (phdrs[0].p_type == PT_LOAD)
@@ -138,6 +138,10 @@ void *qcom_mdt_read_metadata(struct device *dev, const struct firmware *fw, cons
 
 	ehdr_size = phdrs[0].p_filesz;
 	hash_size = phdrs[hash_index].p_filesz;
+
+	/* Overflow check */
+	if (ehdr_size >  SIZE_MAX - hash_size)
+		return ERR_PTR(-ENOMEM);
 
 	/*
 	 * During the scm call memory protection will be enabled for the metadata
@@ -360,23 +364,23 @@ static int __qcom_mdt_load(struct device *dev, const struct firmware *fw, const 
 	if (reloc_base)
 		*reloc_base = mem_reloc;
 deinit:
-	if (ret || !mdata) {
-		if (ret)
-			qcom_scm_pas_shutdown(pas_id);
+	if (ret)
+		qcom_scm_pas_shutdown(pas_id);
 
-
-		if (!dma_phys_below_32b) {
+	if (!mdata && pas_init) {
+		if (dma_phys_below_32b) {
+			dma_free_coherent(dev, metadata_len, metadata, metadata_phys);
+		} else {
 			scm_dev = qcom_get_scm_device();
 			if (!scm_dev)
 				goto out;
-			dma_free_coherent(scm_dev, metadata_len, metadata, metadata_phys);
-		} else {
-			dma_free_coherent(dev, metadata_len, metadata, metadata_phys);
+
+			dma_free_coherent(scm_dev,  metadata_len, metadata, metadata_phys);
 		}
 	}
+
 out:
 	kfree(fw_name);
-
 	return ret;
 }
 
