@@ -3652,7 +3652,14 @@ static int haptics_init_vmax_config(struct haptics_chip *chip)
 	/* Set the initial clamped vmax value when hBoost is used by charger firmware */
 	chip->clamped_vmax_mv = MAX_HV_VMAX_MV;
 	/* Config VMAX */
+#ifndef OPLUS_FEATURE_CHG_BASIC
 	return haptics_set_vmax_mv(chip, chip->config.vmax_mv);
+#else
+	/* init set vmax return 0 to force vibrator driver continue from QCOM */
+	rc = haptics_set_vmax_mv(chip, chip->config.vmax_mv);
+	dev_err(chip->dev, "haptics_set_vmax_mv return %d\n", rc);
+	return 0;
+#endif
 }
 
 static int haptics_config_wa(struct haptics_chip *chip)
