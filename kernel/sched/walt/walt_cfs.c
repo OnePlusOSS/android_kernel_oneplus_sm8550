@@ -209,12 +209,14 @@ static void walt_get_indicies(struct task_struct *p, int *order_index,
 		return;
 	}
 
+	/*
+	 * Don't allow to set FULL_THROTTLE_BOOST
+	 * fallback to CONSERVATIVE_BOOST
+	 */
 	if (is_full_throttle_boost()) {
 		*energy_eval_needed = false;
-		*order_index = num_sched_clusters - 1;
-		if ((*order_index > 1) && task_demand_fits(p,
-			cpumask_first(&cpu_array[*order_index][1])))
-			*end_index = 1;
+		*order_index = 1;
+		*end_index = num_sched_clusters - 2;
 		return;
 	}
 
