@@ -163,7 +163,6 @@ void mhi_deinit_free_irq(struct mhi_controller *mhi_cntrl)
 int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 {
 	struct mhi_event *mhi_event = mhi_cntrl->mhi_event;
-	struct device *dev = &mhi_cntrl->mhi_dev->dev;
 	unsigned long irq_flags = IRQF_SHARED | IRQF_NO_SUSPEND;
 	int i, ret;
 
@@ -177,7 +176,7 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 				   irq_flags,
 				   "bhi", mhi_cntrl);
 	if (ret) {
-		MHI_ERR(dev, "error requesting to irq:%d, ret=%d\n",
+		dev_err(mhi_cntrl->cntrl_dev, "error requesting to irq:%d, ret=%d\n",
 			mhi_cntrl->irq[0], ret);
 		return ret;
 	}
@@ -187,8 +186,7 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 			continue;
 
 		if (mhi_event->irq >= mhi_cntrl->nr_irqs) {
-			MHI_ERR(dev, "irq %d not available for event ring\n",
-				mhi_event->irq);
+			dev_err(mhi_cntrl->cntrl_dev, "irq %d not available for event ring\n", mhi_event->irq);
 			ret = -EINVAL;
 			goto error_request;
 		}
@@ -198,8 +196,7 @@ int mhi_init_irq_setup(struct mhi_controller *mhi_cntrl)
 				  irq_flags,
 				  "mhi", mhi_event);
 		if (ret) {
-			MHI_ERR(dev, "Error requesting irq:%d for ev:%d\n",
-				mhi_cntrl->irq[mhi_event->irq], i);
+			dev_err(mhi_cntrl->cntrl_dev, "Error requesting irq:%d for ev:%d\n", mhi_cntrl->irq[mhi_event->irq], i);
 			goto error_request;
 		}
 	}

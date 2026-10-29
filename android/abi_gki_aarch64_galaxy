@@ -78,6 +78,7 @@
   regulator_get_current_limit
   rfkill_set_sw_state
   sbitmap_queue_min_shallow_depth
+  show_mem
   skb_copy_ubufs
   smpboot_unregister_percpu_thread
   snd_soc_add_card_controls
@@ -95,6 +96,9 @@
   __traceiter_android_rvh_panic_unhandled
   __traceiter_android_rvh_ufs_complete_init
   __traceiter_android_vh_meminfo_proc_show
+  __traceiter_android_vh_mm_free
+  __traceiter_android_vh_mm_init
+  __traceiter_android_vh_page_cache_read
   __traceiter_android_vh_ptype_head
   __traceiter_android_vh_rtmutex_wait_finish
   __traceiter_android_vh_rtmutex_wait_start
@@ -102,6 +106,7 @@
   __traceiter_android_vh_rwsem_write_wait_finish
   __traceiter_android_vh_sched_show_task
   __traceiter_android_vh_show_mem
+  __traceiter_android_vh_task_mem
   __traceiter_android_vh_try_to_freeze_todo
   __traceiter_android_vh_try_to_freeze_todo_unfrozen
   __traceiter_android_vh_watchdog_timer_softlockup
@@ -112,6 +117,7 @@
   __traceiter_irq_handler_entry
   __traceiter_irq_handler_exit
   __traceiter_kfree_skb
+  __traceiter_rss_stat
   __traceiter_workqueue_execute_start
   __tracepoint_android_rvh_arm64_serror_panic
   __tracepoint_android_rvh_die_kernel_fault
@@ -123,6 +129,9 @@
   __tracepoint_android_rvh_panic_unhandled
   __tracepoint_android_rvh_ufs_complete_init
   __tracepoint_android_vh_meminfo_proc_show
+  __tracepoint_android_vh_mm_free
+  __tracepoint_android_vh_mm_init
+  __tracepoint_android_vh_page_cache_read
   __tracepoint_android_vh_ptype_head
   __tracepoint_android_vh_rtmutex_wait_finish
   __tracepoint_android_vh_rtmutex_wait_start
@@ -130,6 +139,7 @@
   __tracepoint_android_vh_rwsem_write_wait_finish
   __tracepoint_android_vh_sched_show_task
   __tracepoint_android_vh_show_mem
+  __tracepoint_android_vh_task_mem
   __tracepoint_android_vh_try_to_freeze_todo
   __tracepoint_android_vh_try_to_freeze_todo_unfrozen
   __tracepoint_android_vh_watchdog_timer_softlockup
@@ -140,6 +150,7 @@
   __tracepoint_irq_handler_entry
   __tracepoint_irq_handler_exit
   __tracepoint_kfree_skb
+  __tracepoint_rss_stat
   __tracepoint_workqueue_execute_start
   usb_alloc_dev
   usb_deregister_dev

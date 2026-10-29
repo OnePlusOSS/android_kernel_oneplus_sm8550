@@ -25,6 +25,8 @@
   __alloc_skb
   alloc_skb_with_frags
   alloc_workqueue
+  alloc_workqueue_attrs
+  apply_workqueue_attrs
   amba_bustype
   amba_driver_register
   amba_driver_unregister
@@ -877,6 +879,7 @@
   freq_qos_add_request
   freq_qos_remove_request
   freq_qos_update_request
+  free_workqueue_attrs
   fsync_bdev
   fwnode_find_reference
   fwnode_get_next_child_node
@@ -2023,6 +2026,7 @@
   set_normalized_timespec64
   set_page_dirty_lock
   __SetPageMovable
+  __set_task_comm
   set_task_cpu
   set_user_nice
   sg_alloc_table
@@ -2362,6 +2366,9 @@
   __traceiter_android_vh_binder_wakeup_ilocked
   __traceiter_android_vh_blk_alloc_rqs
   __traceiter_android_vh_blk_rq_ctx_init
+  __traceiter_android_rvh_alloc_and_link_pwqs
+  __traceiter_android_vh_blk_mq_delay_run_hw_queue
+  __traceiter_android_vh_blk_mq_kick_requeue_list
   __traceiter_android_vh_clear_rwsem_reader_owned
   __traceiter_android_vh_clear_rwsem_writer_owned
   __traceiter_android_vh_cpu_idle_enter
@@ -2369,21 +2376,32 @@
   __traceiter_android_vh_cpuidle_psci_enter
   __traceiter_android_vh_cpuidle_psci_exit
   __traceiter_android_vh_do_anonymous_page
+  __traceiter_android_vh_do_async_mmap_readahead
+  __traceiter_android_vh_do_new_mount_fc
   __traceiter_android_vh_do_swap_page
+  __traceiter_android_vh_do_swap_page_lock_check
   __traceiter_android_vh_do_wp_page
   __traceiter_android_vh_dup_task_struct
+  __traceiter_android_vh_f2fs_file_open
   __traceiter_android_vh_ftrace_dump_buffer
   __traceiter_android_vh_ftrace_format_check
   __traceiter_android_vh_ftrace_oops_enter
   __traceiter_android_vh_ftrace_oops_exit
   __traceiter_android_vh_ftrace_size_check
   __traceiter_android_vh_fuse_request_end
+  __traceiter_android_vh_filemap_update_page
+  __traceiter_android_vh_lock_folio_drop_mmap_end
+  __traceiter_android_vh_lock_folio_drop_mmap_start
   __traceiter_android_vh_gic_resume
+  __traceiter_android_vh_init_adjust_zone_wmark
   __traceiter_android_vh_ipi_stop
   __traceiter_android_vh_irqtime_account_process_tick
   __traceiter_android_vh_jiffies_update
   __traceiter_android_vh_logbuf
   __traceiter_android_vh_logbuf_pr_cont
+  __traceiter_android_vh_lruvec_add_folio
+  __traceiter_android_vh_lruvec_del_folio
+  __traceiter_android_vh_mm_free_page
   __traceiter_android_vh_mmap_region
   __traceiter_android_vh_mmc_attach_sd
   __traceiter_android_vh_mmc_blk_mq_rw_recovery
@@ -2407,6 +2425,8 @@
   __traceiter_android_vh_show_resume_epoch_val
   __traceiter_android_vh_show_suspend_epoch_val
   __traceiter_android_vh_shrink_slab_bypass
+  __traceiter_android_vh_shrink_page_lock_owner_set
+  __traceiter_android_vh_shrink_page_lock_owner_clear
   __traceiter_android_vh_swapmem_gather_add_bypass
   __traceiter_android_vh_swapmem_gather_finish
   __traceiter_android_vh_swapmem_gather_init
@@ -2447,6 +2467,9 @@
   __traceiter_sys_exit
   __traceiter_usb_gadget_connect
   __traceiter_usb_gadget_disconnect
+  __traceiter_android_rvh_create_worker
+  __traceiter_android_rvh_balance_fair
+  __traceiter_android_rvh_before_pick_task_fair
   __tracepoint_android_rvh_account_irq
   __tracepoint_android_rvh_after_dequeue_task
   __tracepoint_android_rvh_after_enqueue_task
@@ -2503,6 +2526,9 @@
   __tracepoint_android_vh_binder_wakeup_ilocked
   __tracepoint_android_vh_blk_alloc_rqs
   __tracepoint_android_vh_blk_rq_ctx_init
+  __tracepoint_android_rvh_alloc_and_link_pwqs
+  __tracepoint_android_vh_blk_mq_kick_requeue_list
+  __tracepoint_android_vh_blk_mq_delay_run_hw_queue
   __tracepoint_android_vh_clear_rwsem_reader_owned
   __tracepoint_android_vh_clear_rwsem_writer_owned
   __tracepoint_android_vh_cpu_idle_enter
@@ -2510,21 +2536,32 @@
   __tracepoint_android_vh_cpuidle_psci_enter
   __tracepoint_android_vh_cpuidle_psci_exit
   __tracepoint_android_vh_do_anonymous_page
+  __tracepoint_android_vh_do_async_mmap_readahead
+  __tracepoint_android_vh_do_new_mount_fc
   __tracepoint_android_vh_do_swap_page
+  __tracepoint_android_vh_do_swap_page_lock_check
   __tracepoint_android_vh_do_wp_page
   __tracepoint_android_vh_dup_task_struct
+  __tracepoint_android_vh_f2fs_file_open
   __tracepoint_android_vh_ftrace_dump_buffer
   __tracepoint_android_vh_ftrace_format_check
   __tracepoint_android_vh_ftrace_oops_enter
   __tracepoint_android_vh_ftrace_oops_exit
   __tracepoint_android_vh_ftrace_size_check
   __tracepoint_android_vh_fuse_request_end
+  __tracepoint_android_vh_filemap_update_page
+  __tracepoint_android_vh_lock_folio_drop_mmap_end
+  __tracepoint_android_vh_lock_folio_drop_mmap_start
   __tracepoint_android_vh_gic_resume
+  __tracepoint_android_vh_init_adjust_zone_wmark
   __tracepoint_android_vh_ipi_stop
   __tracepoint_android_vh_irqtime_account_process_tick
   __tracepoint_android_vh_jiffies_update
   __tracepoint_android_vh_logbuf
   __tracepoint_android_vh_logbuf_pr_cont
+  __tracepoint_android_vh_lruvec_add_folio
+  __tracepoint_android_vh_lruvec_del_folio
+  __tracepoint_android_vh_mm_free_page
   __tracepoint_android_vh_mmap_region
   __tracepoint_android_vh_mmc_attach_sd
   __tracepoint_android_vh_mmc_blk_mq_rw_recovery
@@ -2548,6 +2585,8 @@
   __tracepoint_android_vh_show_resume_epoch_val
   __tracepoint_android_vh_show_suspend_epoch_val
   __tracepoint_android_vh_shrink_slab_bypass
+  __tracepoint_android_vh_shrink_page_lock_owner_set
+  __tracepoint_android_vh_shrink_page_lock_owner_clear
   __tracepoint_android_vh_swapmem_gather_add_bypass
   __tracepoint_android_vh_swapmem_gather_finish
   __tracepoint_android_vh_swapmem_gather_init
@@ -2591,6 +2630,9 @@
   __tracepoint_sys_exit
   __tracepoint_usb_gadget_connect
   __tracepoint_usb_gadget_disconnect
+  __tracepoint_android_rvh_create_worker
+  __tracepoint_android_rvh_balance_fair
+  __tracepoint_android_rvh_before_pick_task_fair
   trace_print_array_seq
   trace_print_flags_seq
   trace_print_hex_seq

@@ -1452,6 +1452,20 @@
   crypto_register_skcipher
   crypto_unregister_skcipher
 
+# required by batman-adv.ko
+  br_multicast_has_querier_adjacent
+  br_multicast_has_querier_anywhere
+  br_multicast_has_router_adjacent
+  br_multicast_list_adjacent
+  crc32c
+  dev_get_iflink
+  ip_mc_check_igmp
+  ipv6_mc_check_mld
+  netdev_master_upper_dev_get_rcu
+  netif_rx_any_context
+  skb_prepare_seq_read
+  skb_seq_read
+
 # required by blk-mq-virtio.ko
   blk_mq_map_queues
 

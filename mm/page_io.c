@@ -26,6 +26,9 @@
 #include <linux/uio.h>
 #include <linux/sched/task.h>
 
+#undef CREATE_TRACE_POINTS
+#include <trace/hooks/vmscan.h>
+
 void end_swap_bio_write(struct bio *bio)
 {
 	struct page *page = bio_first_page_all(bio);
@@ -181,6 +184,7 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 	int ret = 0;
 
 	if (try_to_free_swap(page)) {
+		trace_android_vh_shrink_page_lock_owner_clear(page);
 		unlock_page(page);
 		goto out;
 	}
@@ -191,11 +195,13 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 	ret = arch_prepare_to_swap(page);
 	if (ret) {
 		set_page_dirty(page);
+		trace_android_vh_shrink_page_lock_owner_clear(page);
 		unlock_page(page);
 		goto out;
 	}
 	if (frontswap_store(page) == 0) {
 		set_page_writeback(page);
+		trace_android_vh_shrink_page_lock_owner_clear(page);
 		unlock_page(page);
 		end_page_writeback(page);
 		goto out;
@@ -257,6 +263,7 @@ int __swap_writepage(struct page *page, struct writeback_control *wbc,
 		kiocb.ki_pos = page_file_offset(page);
 
 		set_page_writeback(page);
+		trace_android_vh_shrink_page_lock_owner_clear(page);
 		unlock_page(page);
 		ret = mapping->a_ops->direct_IO(&kiocb, &from);
 		if (ret == PAGE_SIZE) {
@@ -298,6 +305,7 @@ int __swap_writepage(struct page *page, struct writeback_control *wbc,
 	bio_associate_blkg_from_page(bio, page);
 	count_swpout_vm_event(page);
 	set_page_writeback(page);
+	trace_android_vh_shrink_page_lock_owner_clear(page);
 	unlock_page(page);
 	submit_bio(bio);
 

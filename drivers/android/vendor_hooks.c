@@ -86,6 +86,7 @@
 #include <trace/hooks/logbuf.h>
 #include <trace/hooks/remoteproc.h>
 #include <trace/hooks/reboot.h>
+#include <trace/hooks/fs.h>
 #include <trace/hooks/hung_task.h>
 #include <trace/hooks/bug.h>
 #include <trace/hooks/softlockup.h>
@@ -115,6 +116,8 @@
 #include <trace/hooks/delayacct.h>
 #include <trace/hooks/tmpfile.h>
 #include <trace/hooks/fuse.h>
+#include <trace/hooks/asoc.h>
+#include <trace/hooks/blk.h>
 
 /*
  * Export tracepoints that act as a bare tracehook (ie: have no trace event
@@ -132,6 +135,8 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_binder_priority_skip);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_binder_set_priority);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_binder_restore_priority);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_binder_wakeup_ilocked);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_blk_mq_delay_run_hw_queue);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_blk_mq_kick_requeue_list);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_send_sig_info);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_slab_alloc_node);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_slab_free);
@@ -173,6 +178,7 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mpam_set);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_gic_resume);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_gic_suspend);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_wq_lockup_pool);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_alloc_and_link_pwqs);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_ipi_stop);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_sysrq_crash);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_printk_hotplug);
@@ -201,6 +207,9 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_irqs_enable);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_cpu_cgroup_attach);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_cpu_cgroup_can_attach);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_cpu_cgroup_online);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_meminfo_cache_adjust);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_si_mem_available_adjust);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_si_meminfo_adjust);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_ftrace_oops_enter);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_ftrace_oops_exit);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_ftrace_size_check);
@@ -374,6 +383,8 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mmc_check_status);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mmap_region);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_try_to_unmap_one);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_shrink_node_memcgs);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_shrink_page_lock_owner_clear);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_shrink_page_lock_owner_set);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mmc_sdio_pm_flag_set);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_tune_fault_around_bytes);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_tune_scan_type);
@@ -400,6 +411,7 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_mmc_sd_dataline_timing);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_cfg80211_set_context);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_cfg80211_get_context);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_save_track_hash);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mem_cgroup_charge);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mem_cgroup_id_remove);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mem_cgroup_css_offline);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mem_cgroup_css_online);
@@ -425,6 +437,9 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_update_thermal_stats);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_binder_proc_transaction);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_binder_new_ref);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_binder_del_ref);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_shrink_page_list);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_inode_lru_isolate);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_invalidate_mapping_pagevec);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_show_mapcount_pages);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_traversal_lruvec);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_update_page_mapcount);
@@ -437,12 +452,14 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_alloc_uid);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_free_user);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_modify_thermal_cpu_get_power);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_page_cache_forced_ra);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_page_cache_read);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_queue_request_and_unlock);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_fuse_request_end);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_alloc_pages_reclaim_bypass);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_alloc_pages_failure_bypass);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_cpufreq_acct_update_power);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_rmqueue);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_pagecache_get_page);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_tune_inactive_ratio);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_check_hibernation_swap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_save_cpu_resume);
@@ -475,6 +492,8 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_compact_finished);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_check_page_look_around_ref);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_look_around);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_look_around_migrate_page);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_lruvec_add_folio);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_lruvec_del_folio);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_test_clear_look_around_ref);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_set_page_migrating);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_clear_page_migrating);
@@ -510,6 +529,7 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_tmpfile_secctx);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_tmpfile_create_check_inode);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_tmpfile_send_open);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_swap_page_spf);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_count_workingset_refault);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_swapmem_gather_init);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_swapmem_gather_add_bypass);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_swapmem_gather_finish);
@@ -519,19 +539,38 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mmc_init_queue);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_shmem_swapin_page);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_wp_page);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_swap_page);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_swap_page_lock_check);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_anonymous_page);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_async_mmap_readahead);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_uprobes_replace_page);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_record_rwsem_reader_owned);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_clear_rwsem_reader_owned);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_record_rwsem_writer_owned);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_clear_rwsem_writer_owned);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_filemap_add_to_page_cache);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_percpu_rwsem_down_read);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_percpu_rwsem_up_write);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_percpu_rwsem_wait_complete);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_rwsem_read_trylock_failed);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mglru_new_gen);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mm_free_page);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_io_statistics);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_page_cache_miss);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_filemap_pages);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_lru_gen_add_page_skip);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_lru_gen_del_page_skip);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_perform_reclaim);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_kswapd_shrink_node);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_keep_reclaimed_page);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_clear_reclaimed_page);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_evict_pages_bypass);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mglru_should_abort_scan);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_lru_cache_add);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_lru_cache_add_page_activate);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_filemap_fault_pre_page_locked);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_filemap_page_mapped);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_zap_pte_range_page_remove_rmap);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_put_volsw);
 /*
  * For type visibility
  */
@@ -548,6 +587,16 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_vmscan_kswapd_done);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_should_end_madvise);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_should_fault_around);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_read_fault);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_do_new_mount_fc);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_filemap_read);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_filemap_map_pages);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_lock_folio_drop_mmap_start);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_lock_folio_drop_mmap_end);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_filemap_update_page);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_f2fs_file_open);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_set_tsk_need_resched_lazy);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_init_adjust_zone_wmark);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_task_mem);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mm_free);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mm_init);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_create_worker);

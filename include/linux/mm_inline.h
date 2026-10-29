@@ -220,6 +220,11 @@ static inline bool lru_gen_add_page(struct lruvec *lruvec, struct page *page, bo
 	int type = page_is_file_lru(page);
 	int zone = page_zonenum(page);
 	struct lru_gen_struct *lrugen = &lruvec->lrugen;
+	bool skip = false;
+
+	trace_android_vh_lru_gen_add_page_skip(lruvec, page, &skip);
+	if (skip)
+		return true;
 
 	VM_WARN_ON_ONCE_PAGE(gen != -1, page);
 
@@ -262,6 +267,11 @@ static inline bool lru_gen_del_page(struct lruvec *lruvec, struct page *page, bo
 {
 	unsigned long flags;
 	int gen = page_lru_gen(page);
+	bool skip = false;
+
+	trace_android_vh_lru_gen_del_page_skip(lruvec, page, &skip);
+	if (skip)
+		return true;
 
 	if (gen < 0)
 		return false;
@@ -308,6 +318,11 @@ static __always_inline void add_page_to_lru_list(struct page *page,
 				struct lruvec *lruvec)
 {
 	enum lru_list lru = page_lru(page);
+	bool skip = false;
+
+	trace_android_vh_lruvec_add_folio(lruvec, page, lru, false, &skip);
+	if (skip)
+		return;
 
 	if (lru_gen_add_page(lruvec, page, false))
 		return;
@@ -321,6 +336,11 @@ static __always_inline void add_page_to_lru_list_tail(struct page *page,
 				struct lruvec *lruvec)
 {
 	enum lru_list lru = page_lru(page);
+	bool skip = false;
+
+	trace_android_vh_lruvec_add_folio(lruvec, page, lru, true, &skip);
+	if (skip)
+		return;
 
 	if (lru_gen_add_page(lruvec, page, true))
 		return;
@@ -333,6 +353,12 @@ static __always_inline void add_page_to_lru_list_tail(struct page *page,
 static __always_inline void del_page_from_lru_list(struct page *page,
 				struct lruvec *lruvec)
 {
+	bool skip = false;
+
+	trace_android_vh_lruvec_del_folio(lruvec, page, page_lru(page), &skip);
+	if (skip)
+		return;
+
 	if (lru_gen_del_page(lruvec, page, false))
 		return;
 

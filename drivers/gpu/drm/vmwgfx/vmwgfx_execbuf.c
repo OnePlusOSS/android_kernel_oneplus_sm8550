@@ -3627,6 +3627,11 @@ static int vmw_cmd_check(struct vmw_private *dev_priv,
 
 
 	cmd_id = header->id;
+	if (header->size > SVGA_CMD_MAX_DATASIZE) {
+		VMW_DEBUG_USER("SVGA3D command: %d is too big.\n",
+			       cmd_id + SVGA_3D_CMD_BASE);
+		return -E2BIG;
+	}
 	*size = header->size + sizeof(SVGA3dCmdHeader);
 
 	cmd_id -= SVGA_3D_CMD_BASE;
@@ -4112,7 +4117,7 @@ int vmw_execbuf_process(struct drm_file *file_priv,
 		vmw_binding_state_reset(sw_context->staged_bindings);
 
 	if (!sw_context->res_ht_initialized) {
-		ret = drm_ht_create(&sw_context->res_ht, VMW_RES_HT_ORDER);
+		ret = vmwgfx_ht_create(&sw_context->res_ht, VMW_RES_HT_ORDER);
 		if (unlikely(ret != 0))
 			goto out_unlock;
 
